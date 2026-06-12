@@ -1,0 +1,193 @@
+package xrpc
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
+	"net/http"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+
+	"tangled.org/core/api/tangled"
+	"tangled.org/core/knotserver/git"
+	xrpcerr "tangled.org/core/xrpc/errors"
+)
+
+func (x *Xrpc) RepoBlob(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	repoPath, err := x.parseRepoParam(repo)
+	if err != nil {
+		writeError(w, err.(xrpcerr.XrpcError), http.StatusBadRequest)
+		return
+	}
+
+	ref := r.URL.Query().Get("ref")
+	// ref can be empty (git.Open handles this)
+
+	treePath := r.URL.Query().Get("path")
+	if treePath == "" {
+		writeError(w, xrpcerr.NewXrpcError(
+			xrpcerr.WithTag("InvalidRequest"),
+			xrpcerr.WithMessage("missing path parameter"),
+		), http.StatusBadRequest)
+		return
+	}
+
+	raw := r.URL.Query().Get("raw") == "true"
+
+	gr, err := git.Open(repoPath, ref)
+	if err != nil {
+		writeError(w, xrpcerr.RefNotFoundError, http.StatusNotFound)
+		return
+	}
+
+	// first check if this path is a submodule
+	submodule, err := gr.Submodule(treePath)
+	if err != nil {
+		// this is okay, continue and try to treat it as a regular file
+	} else {
+		response := tangled.RepoBlob_Output{
+			Ref:  ref,
+			Path: treePath,
+			Submodule: &tangled.RepoBlob_Submodule{
+				Name:   submodule.Name,
+				Url:    submodule.URL,
+				Branch: &submodule.Branch,
+			},
+		}
+		x.writeJson(w, response)
+		return
+	}
+
+	contents, err := gr.RawContent(treePath)
+	if err != nil {
+		x.Logger.Error("file content", "error", err.Error(), "treePath", treePath)
+		writeError(w, xrpcerr.NewXrpcError(
+			xrpcerr.WithTag("FileNotFound"),
+			xrpcerr.WithMessage("file not found at the specified path"),
+		), http.StatusNotFound)
+		return
+	}
+
+	mimeType := http.DetectContentType(contents)
+
+	// override MIME types for formats that http.DetectContentType does not recognize
+	switch filepath.Ext(treePath) {
+	case ".svg":
+		mimeType = "image/svg+xml"
+	case ".avif":
+		mimeType = "image/avif"
+	case ".jxl":
+		mimeType = "image/jxl"
+	case ".heic", ".heif":
+		mimeType = "image/heif"
+	}
+
+	if raw {
+		contentHash := sha256.Sum256(contents)
+		eTag := fmt.Sprintf("\"%x\"", contentHash)
+
+		switch {
+		case strings.HasPrefix(mimeType, "image/"), strings.HasPrefix(mimeType, "video/"):
+			if clientETag := r.Header.Get("If-None-Match"); clientETag == eTag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			w.Header().Set("ETag", eTag)
+			w.Header().Set("Content-Type", mimeType)
+
+		case strings.HasPrefix(mimeType, "text/"):
+			w.Header().Set("Cache-Control", "public, no-cache")
+			// serve all text content as text/plain
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+		case isTextualMimeType(mimeType):
+			// handle textual application types (json, xml, etc.) as text/plain
+			w.Header().Set("Cache-Control", "public, no-cache")
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+		default:
+			x.Logger.Error("attempted to serve disallowed file type", "mimetype", mimeType)
+			writeError(w, xrpcerr.NewXrpcError(
+				xrpcerr.WithTag("InvalidRequest"),
+				xrpcerr.WithMessage("only image, video, and text files can be accessed directly"),
+			), http.StatusForbidden)
+			return
+		}
+		w.Write(contents)
+		return
+	}
+
+	isTextual := func(mt string) bool {
+		return strings.HasPrefix(mt, "text/") || isTextualMimeType(mt)
+	}
+
+	var content string
+	var encoding string
+
+	isBinary := !isTextual(mimeType)
+	size := int64(len(contents))
+
+	if isBinary {
+		content = base64.StdEncoding.EncodeToString(contents)
+		encoding = "base64"
+	} else {
+		content = string(contents)
+		encoding = "utf-8"
+	}
+
+	response := tangled.RepoBlob_Output{
+		Ref:      ref,
+		Path:     treePath,
+		Content:  &content,
+		Encoding: &encoding,
+		Size:     &size,
+		IsBinary: &isBinary,
+	}
+
+	if mimeType != "" {
+		response.MimeType = &mimeType
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	lastCommit, err := gr.LastCommitFile(ctx, treePath)
+	if err == nil && lastCommit != nil {
+		response.LastCommit = &tangled.RepoBlob_LastCommit{
+			Hash:    lastCommit.Hash.String(),
+			Message: lastCommit.Message,
+			When:    lastCommit.When.Format(time.RFC3339),
+		}
+
+		// try to get author information
+		commit, err := gr.Commit(lastCommit.Hash)
+		if err == nil {
+			response.LastCommit.Author = &tangled.RepoBlob_Signature{
+				Name:  commit.Author.Name,
+				Email: commit.Author.Email,
+			}
+		}
+	}
+
+	x.writeJson(w, response)
+}
+
+// isTextualMimeType returns true if the MIME type represents textual content
+// that should be served as text/plain for security reasons
+func isTextualMimeType(mimeType string) bool {
+	textualTypes := []string{
+		"application/json",
+		"application/xml",
+		"application/yaml",
+		"application/x-yaml",
+		"application/toml",
+		"application/javascript",
+		"application/ecmascript",
+	}
+
+	return slices.Contains(textualTypes, mimeType)
+}

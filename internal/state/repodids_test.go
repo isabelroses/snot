@@ -19,7 +19,7 @@ func TestRepoDidsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Reload from disk.
+	// Reopen against the same db file.
 	r2, err := LoadRepoDids(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestRepoDidsByRepo(t *testing.T) {
 	}
 }
 
-func TestRepoDidsFilePerms(t *testing.T) {
+func TestDBFilePerms(t *testing.T) {
 	dir := t.TempDir()
 	r, err := LoadRepoDids(dir)
 	if err != nil {
@@ -67,9 +67,9 @@ func TestRepoDidsFilePerms(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	info, err := os.Stat(filepath.Join(dir, repodidFile))
+	info, err := os.Stat(filepath.Join(dir, dbFile))
 	if err != nil {
-		t.Fatalf("repodids.json not written: %v", err)
+		t.Fatalf("%s not written: %v", dbFile, err)
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Errorf("file mode = %v, want 0600", info.Mode().Perm())

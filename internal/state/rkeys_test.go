@@ -17,6 +17,7 @@ func TestRkeyMapPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Reopen against the same db file.
 	m2, err := LoadRkeyMap(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -31,8 +32,8 @@ func TestRkeyMapPersists(t *testing.T) {
 		t.Error("expected miss")
 	}
 
-	if _, err := os.Stat(filepath.Join(dir, "rkeys.json")); err != nil {
-		t.Fatalf("rkeys.json not written: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, dbFile)); err != nil {
+		t.Fatalf("%s not written: %v", dbFile, err)
 	}
 }
 

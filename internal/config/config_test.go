@@ -1,20 +1,16 @@
 package config
 
 import (
-	"context"
 	"testing"
-
-	"github.com/sethvargo/go-envconfig"
 )
 
 func load(t *testing.T, env map[string]string) (*Config, error) {
 	t.Helper()
-	var c Config
-	err := envconfig.ProcessWith(context.Background(), &envconfig.Config{
-		Target:   &c,
-		Lookuper: envconfig.MapLookuper(env),
-	})
-	return &c, err
+	var environ []string
+	for k, v := range env {
+		environ = append(environ, k+"="+v)
+	}
+	return loadWith(func() []string { return environ })
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -39,6 +35,27 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if c.UserMap["did:plc:abc123"] != "isabel" || c.UserMap["did:plc:def456"] != "alice" {
 		t.Errorf("UserMap = %v", c.UserMap)
+	}
+}
+
+func TestLoadOverrides(t *testing.T) {
+	c, err := load(t, map[string]string{
+		"SNOT_HOSTNAME":    "knot.example.com",
+		"SNOT_OWNER_DID":   "did:plc:abc123",
+		"SNOT_USER_MAP":    "did:plc:abc123=isabel",
+		"SNOT_DB_DSN":      "postgres:///forgejo",
+		"SNOT_REPO_ROOT":   "/repos",
+		"SNOT_LISTEN_ADDR": "127.0.0.1:9000",
+		"SNOT_DEV":         "true",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ListenAddr != "127.0.0.1:9000" {
+		t.Errorf("ListenAddr = %q", c.ListenAddr)
+	}
+	if !c.Dev {
+		t.Error("Dev should be true")
 	}
 }
 

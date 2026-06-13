@@ -40,15 +40,12 @@ func (c *ServeCmd) Run() error {
 	}
 	defer store.Close()
 
-	rkeys, err := state.LoadRkeyMap(cfg.StateDir)
+	db, err := state.Open(cfg.StateDir)
 	if err != nil {
 		return fmt.Errorf("state: %w", err)
 	}
-
-	dids, err := state.LoadRepoDids(cfg.StateDir)
-	if err != nil {
-		return fmt.Errorf("state (repodids): %w", err)
-	}
+	rkeys := db.Rkeys()
+	dids := db.RepoDids()
 
 	scheme := "https"
 	if cfg.Dev {

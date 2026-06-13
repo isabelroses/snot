@@ -25,14 +25,27 @@ in
     package = mkPackageOption pkgs "snot" { };
 
     settings = mkOption {
-      type = settingsFormat.type;
-      default = { };
-      example = {
-        hostname = "knot.example.com";
-        owner_did = "did:plc:abc123";
-        repo_root = "/var/lib/forgejo/repositories";
-        users."did:plc:abc123" = "isabel";
+      type = lib.types.submodule {
+        freeformType = settingsFormat.type;
+
+        options = {
+          db_dsn = mkOption {
+            default = "postgres://snot@/forgejo?host=/run/postgresql";
+            description = "the db connection to use";
+          };
+
+          listen_addr = mkOption {
+            default = "0.0.0.0:5555";
+            description = "the address to listen on";
+          };
+
+          repo_root = mkOption {
+            default = "/var/lib/forgejo/repositories";
+            description = "the location of the forgejo repositories";
+          };
+        };
       };
+
       description = ''
         The configuration for snot.
       '';
@@ -82,7 +95,7 @@ in
         PrivateDevices = true;
         ProtectSystem = "strict";
         ProtectHome = true;
-        ReadOnlyPaths = [ (cfg.settings.repo_root or "/var/lib/forgejo/repositories") ];
+        ReadOnlyPaths = [ cfg.settings.repo_root ];
         ProtectKernelTunables = true;
         ProtectKernelModules = true;
         ProtectControlGroups = true;

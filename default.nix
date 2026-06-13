@@ -5,7 +5,7 @@ buildGoModule (finalAttrs: {
 
   src = ./.;
 
-  vendorHash = "sha256-uoHU3nySdQ/h1M9MWyrW/9h963byGV5AYvzW2xPkXyE=";
+  vendorHash = "sha256-DH7PTmkZHjl8VJ4l/2zGg5qYq3+LqI4SvrE4nbNU9yo=";
 
   subPackages = [ "cmd/snot" ];
 

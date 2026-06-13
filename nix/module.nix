@@ -13,8 +13,10 @@ let
     mkIf
     mkOption
     mkPackageOption
-    types
     ;
+
+  settingsFormat = pkgs.formats.toml { };
+  configFile = settingsFormat.generate "snot.toml" cfg.settings;
 in
 {
   options.services.snot = {
@@ -23,89 +25,32 @@ in
     package = mkPackageOption pkgs "snot" { };
 
     settings = mkOption {
-      description = ''
-        Environment variables to set for the service. Secrets should be
-        specified using {option}`environmentFiles`.
-      '';
-      type = types.submodule {
-        freeformType = types.attrsOf (types.nullOr types.str);
-        options = {
-          SNOT_HOSTNAME = mkOption {
-            type = types.str;
-            example = "knot.example.com";
-            description = "Public hostname of the shim (the knot domain).";
-          };
-
-          SNOT_LISTEN_ADDR = mkOption {
-            type = types.str;
-            default = "0.0.0.0:5555";
-            description = "Address for the shim to listen on.";
-          };
-
-          SNOT_OWNER_DID = mkOption {
-            type = types.str;
-            example = "did:plc:abc123";
-            description = "atproto DID of the knot owner; governs the knot alone, not repos.";
-          };
-
-          SNOT_USER_MAP = mkOption {
-            type = types.str;
-            example = "did:plc:abc123=isabel,did:plc:def456=alice";
-            description = "Comma-separated did=user pairs mapping repo-owner DIDs to Forgejo users.";
-          };
-
-          SNOT_DB_DSN = mkOption {
-            type = types.str;
-            default = "postgres://snot@/forgejo?host=/run/postgresql";
-            description = ''
-              Postgres DSN for the Forgejo database. The default uses
-              unix-socket peer auth; create a `snot` role with
-              SELECT grants on `"user"`, `repository`, `language_stat`, and
-              `public_key`.
-            '';
-          };
-
-          SNOT_REPO_ROOT = mkOption {
-            type = types.str;
-            default = "/var/lib/forgejo/repositories";
-            description = "Forgejo's repository storage directory.";
-          };
-
-          SNOT_PUSH_REMOTE = mkOption {
-            type = types.nullOr types.str;
-            default = null;
-            example = "git@git.example.com";
-            description = "SSH remote base suggested when an HTTP push is rejected.";
-          };
-
-          SNOT_STATE_DIR = mkOption {
-            type = types.str;
-            default = "/var/lib/snot";
-            description = "Directory holding the signing key and rkey map.";
-          };
-
-          SNOT_PLC_URL = mkOption {
-            type = types.str;
-            default = "https://plc.directory";
-            description = "URL of the DID PLC directory.";
-          };
-        };
+      type = settingsFormat.type;
+      default = { };
+      example = {
+        hostname = "knot.example.com";
+        owner_did = "did:plc:abc123";
+        repo_root = "/var/lib/forgejo/repositories";
+        users."did:plc:abc123" = "isabel";
       };
+      description = ''
+        The configuration for snot.
+      '';
     };
 
     forgejoGroup = mkOption {
-      type = types.str;
+      type = lib.types.str;
       default = "forgejo";
       description = "Group with read access to the repository root.";
     };
 
     environmentFiles = mkOption {
-      type = types.listOf types.path;
+      type = lib.types.listOf lib.types.path;
       default = [ ];
       description = ''
-        Files to load environment variables from. Loaded variables override
-        values set in {option}`settings`; use them for secrets such as a
-        `SNOT_DB_DSN` containing a password.
+        Files to load environment variables from. `SNOT_*` variables override
+        the corresponding TOML keys; use them for secrets such as a `db_dsn`
+        with a password.
       '';
     };
   };
@@ -121,10 +66,7 @@ in
       path = [ pkgs.git ];
 
       serviceConfig = {
-        ExecStart = "${getExe cfg.package} serve";
-        Environment = lib.mapAttrsToList (k: v: "${k}=${v}") (
-          lib.filterAttrs (_: v: v != null) cfg.settings
-        );
+        ExecStart = "${getExe cfg.package} serve --config ${configFile}";
         EnvironmentFile = cfg.environmentFiles;
 
         DynamicUser = true;
@@ -140,7 +82,7 @@ in
         PrivateDevices = true;
         ProtectSystem = "strict";
         ProtectHome = true;
-        ReadOnlyPaths = [ cfg.settings.SNOT_REPO_ROOT ];
+        ReadOnlyPaths = [ (cfg.settings.repo_root or "/var/lib/forgejo/repositories") ];
         ProtectKernelTunables = true;
         ProtectKernelModules = true;
         ProtectControlGroups = true;

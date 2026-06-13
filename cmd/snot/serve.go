@@ -25,11 +25,11 @@ import (
 
 type ServeCmd struct{}
 
-func (c *ServeCmd) Run() error {
+func (c *ServeCmd) Run(cli *CLI) error {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	cfg, err := config.Load(ctx)
+	cfg, err := config.Load(ctx, cli.Config)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}

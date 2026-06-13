@@ -11,10 +11,10 @@ import (
 
 type CheckCmd struct{}
 
-func (c *CheckCmd) Run() error {
+func (c *CheckCmd) Run(cli *CLI) error {
 	ctx := context.Background()
 
-	cfg, err := config.Load(ctx)
+	cfg, err := config.Load(ctx, cli.Config)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}

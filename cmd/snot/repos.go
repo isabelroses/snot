@@ -13,10 +13,10 @@ import (
 
 type ReposCmd struct{}
 
-func (c *ReposCmd) Run() error {
+func (c *ReposCmd) Run(cli *CLI) error {
 	ctx := context.Background()
 
-	cfg, err := config.Load(ctx)
+	cfg, err := config.Load(ctx, cli.Config)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}

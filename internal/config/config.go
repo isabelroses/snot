@@ -2,12 +2,16 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
+	"github.com/knadh/koanf/parsers/toml/v2"
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/env/v2"
+	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 )
 
@@ -20,7 +24,8 @@ type Config struct {
 	OwnerDid string
 
 	// UserMap maps repo-owner DIDs to the Forgejo users whose repos they
-	// expose, parsed from SNOT_USER_MAP="did:plc:abc=isabel,did:plc:def=alice".
+	// expose. In TOML this is the [users] table; SNOT_USER_MAP
+	// ("did:plc:abc=isabel,did:plc:def=alice") overrides/extends it.
 	UserMap map[string]string
 
 	DbDsn      string
@@ -31,14 +36,15 @@ type Config struct {
 	Dev        bool
 }
 
-// Load reads configuration from SNOT_* environment variables.
-func Load(ctx context.Context) (*Config, error) {
-	return loadWith(nil)
+// Load reads configuration from the TOML file at path (optional; skipped if
+// absent), with SNOT_* environment variables overriding individual keys.
+func Load(ctx context.Context, path string) (*Config, error) {
+	return loadWith(path, nil)
 }
 
-// loadWith builds the config from the given environ source (nil = os.Environ),
-// applying defaults first and SNOT_* env vars on top.
-func loadWith(environ func() []string) (*Config, error) {
+// loadWith layers defaults < TOML file < SNOT_* env. environ defaults to
+// os.Environ when nil.
+func loadWith(path string, environ func() []string) (*Config, error) {
 	k := koanf.New(".")
 
 	_ = k.Load(confmap.Provider(map[string]any{
@@ -47,6 +53,12 @@ func loadWith(environ func() []string) (*Config, error) {
 		"plc_url":     "https://plc.directory",
 		"dev":         "false",
 	}, "."), nil)
+
+	if path != "" {
+		if err := k.Load(file.Provider(path), toml.Parser()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("loading config %s: %w", path, err)
+		}
+	}
 
 	err := k.Load(env.Provider(".", env.Opt{
 		Prefix:      "SNOT_",
@@ -59,12 +71,20 @@ func loadWith(environ func() []string) (*Config, error) {
 		return nil, fmt.Errorf("loading env: %w", err)
 	}
 
+	users := k.StringMap("users")
+	if users == nil {
+		users = map[string]string{}
+	}
+	for did, user := range parseUserMap(k.String("user_map")) {
+		users[did] = user
+	}
+
 	dev, _ := strconv.ParseBool(k.String("dev"))
 	cfg := &Config{
 		Hostname:   k.String("hostname"),
 		ListenAddr: k.String("listen_addr"),
 		OwnerDid:   k.String("owner_did"),
-		UserMap:    parseUserMap(k.String("user_map")),
+		UserMap:    users,
 		DbDsn:      k.String("db_dsn"),
 		RepoRoot:   k.String("repo_root"),
 		PushRemote: k.String("push_remote"),
@@ -79,6 +99,8 @@ func loadWith(environ func() []string) (*Config, error) {
 	return cfg, nil
 }
 
+// parseUserMap parses the SNOT_USER_MAP override form
+// "did:plc:abc=isabel,did:plc:def=alice".
 func parseUserMap(s string) map[string]string {
 	m := map[string]string{}
 	for _, pair := range strings.Split(s, ",") {
@@ -98,19 +120,19 @@ func parseUserMap(s string) map[string]string {
 func (c *Config) validate() error {
 	var missing []string
 	if c.Hostname == "" {
-		missing = append(missing, "SNOT_HOSTNAME")
+		missing = append(missing, "hostname / SNOT_HOSTNAME")
 	}
 	if c.OwnerDid == "" {
-		missing = append(missing, "SNOT_OWNER_DID")
+		missing = append(missing, "owner_did / SNOT_OWNER_DID")
 	}
 	if len(c.UserMap) == 0 {
-		missing = append(missing, "SNOT_USER_MAP")
+		missing = append(missing, "[users] / SNOT_USER_MAP")
 	}
 	if c.DbDsn == "" {
-		missing = append(missing, "SNOT_DB_DSN")
+		missing = append(missing, "db_dsn / SNOT_DB_DSN")
 	}
 	if c.RepoRoot == "" {
-		missing = append(missing, "SNOT_REPO_ROOT")
+		missing = append(missing, "repo_root / SNOT_REPO_ROOT")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))

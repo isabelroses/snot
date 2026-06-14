@@ -20,6 +20,7 @@ import (
 	"github.com/isabelroses/snot/internal/repodid"
 	"github.com/isabelroses/snot/internal/resolve"
 	"github.com/isabelroses/snot/internal/state"
+	"github.com/isabelroses/snot/internal/webhook"
 	"github.com/isabelroses/snot/internal/xrpc"
 )
 
@@ -46,6 +47,11 @@ func (c *ServeCmd) Run(cli *CLI) error {
 	}
 	rkeys := db.Rkeys()
 	dids := db.RepoDids()
+
+	eventStore, err := db.SQL()
+	if err != nil {
+		return fmt.Errorf("event store: %w", err)
+	}
 
 	scheme := "https"
 	if cfg.Dev {
@@ -87,6 +93,14 @@ func (c *ServeCmd) Run(cli *CLI) error {
 
 	n := notifier.New()
 
+	wh := &webhook.Handler{
+		Cfg:      cfg,
+		Resolve:  rs,
+		Store:    eventStore,
+		Notifier: &n,
+		Logger:   logger.With("component", "webhook"),
+	}
+
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(loggingMiddleware(logger))
@@ -96,7 +110,8 @@ func (c *ServeCmd) Run(cli *CLI) error {
 		fmt.Fprintf(w, "this is snot, a tangled knot backed by forgejo.\n")
 	})
 	r.Mount("/xrpc", x.Router())
-	r.Get("/events", events.Handler(&n, logger.With("component", "events")))
+	r.Get("/events", events.Handler(eventStore, &n, logger.With("component", "events")))
+	r.Post("/hooks/forgejo", wh.ServeHTTP)
 	r.Mount("/", gs.Routes())
 
 	logger.Info("starting snot", "addr", cfg.ListenAddr, "hostname", cfg.Hostname)

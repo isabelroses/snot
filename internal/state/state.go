@@ -4,9 +4,7 @@
 package state
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
+	"database/sql"
 	"os"
 	"path/filepath"
 
@@ -33,13 +31,21 @@ type repoDidRow struct {
 
 func (repoDidRow) TableName() string { return "repo_dids" }
 
+type eventRow struct {
+	Rkey    string `gorm:"column:rkey;primaryKey"`
+	Nsid    string `gorm:"column:nsid;primaryKey"`
+	Event   []byte `gorm:"column:event"`
+	Created int64  `gorm:"column:created;index"`
+}
+
+func (eventRow) TableName() string { return "events" }
+
 // DB owns snot's persistent SQLite store and hands out typed accessors.
 type DB struct {
 	gorm *gorm.DB
 }
 
-// Open opens (creating if absent) snot.db inside dir, runs migrations, and
-// imports any legacy JSON state left by older versions.
+// Open opens (creating if absent) snot.db inside dir and runs migrations.
 func Open(dir string) (*DB, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -55,17 +61,19 @@ func Open(dir string) (*DB, error) {
 	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
 		return nil, err
 	}
-	if err := gdb.AutoMigrate(&rkeyRow{}, &repoDidRow{}); err != nil {
+	if err := gdb.AutoMigrate(&rkeyRow{}, &repoDidRow{}, &eventRow{}); err != nil {
 		return nil, err
 	}
 	// the db holds PLC rotation keys; keep it owner-only.
 	_ = os.Chmod(path, 0o600)
 
-	db := &DB{gorm: gdb}
-	if err := db.importLegacyJSON(dir); err != nil {
-		return nil, fmt.Errorf("importing legacy json state: %w", err)
-	}
-	return db, nil
+	return &DB{gorm: gdb}, nil
+}
+
+// SQL returns the underlying *sql.DB, which satisfies tangled's
+// eventstream.Store (Exec/Query). The events table holds the knot eventstream.
+func (db *DB) SQL() (*sql.DB, error) {
+	return db.gorm.DB()
 }
 
 // Rkeys returns the rkey↔repo accessor.
@@ -73,80 +81,3 @@ func (db *DB) Rkeys() *RkeyMap { return &RkeyMap{db: db.gorm} }
 
 // RepoDids returns the repo-DID accessor.
 func (db *DB) RepoDids() *RepoDids { return &RepoDids{db: db.gorm} }
-
-// importLegacyJSON one-time-imports rkeys.json / repodids.json written by
-// pre-SQLite versions. It only imports into an empty table, then renames the
-// file to *.migrated so it is kept as a backup and never re-imported.
-func (db *DB) importLegacyJSON(dir string) error {
-	if err := db.importRkeysJSON(filepath.Join(dir, "rkeys.json")); err != nil {
-		return err
-	}
-	return db.importRepoDidsJSON(filepath.Join(dir, "repodids.json"))
-}
-
-func (db *DB) importRkeysJSON(path string) error {
-	b, ok, err := readLegacy(path)
-	if err != nil || !ok {
-		return err
-	}
-	var count int64
-	if err := db.gorm.Model(&rkeyRow{}).Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-	var m map[string]string
-	if err := json.Unmarshal(b, &m); err != nil {
-		return err
-	}
-	rows := make([]rkeyRow, 0, len(m))
-	for rkey, repo := range m {
-		rows = append(rows, rkeyRow{Rkey: rkey, RepoName: repo})
-	}
-	if len(rows) > 0 {
-		if err := db.gorm.Create(&rows).Error; err != nil {
-			return err
-		}
-	}
-	return os.Rename(path, path+".migrated")
-}
-
-func (db *DB) importRepoDidsJSON(path string) error {
-	b, ok, err := readLegacy(path)
-	if err != nil || !ok {
-		return err
-	}
-	var count int64
-	if err := db.gorm.Model(&repoDidRow{}).Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-	var m map[string]RepoDidInfo
-	if err := json.Unmarshal(b, &m); err != nil {
-		return err
-	}
-	rows := make([]repoDidRow, 0, len(m))
-	for did, info := range m {
-		rows = append(rows, repoDidRow{Did: did, User: info.User, Repo: info.Repo, Key: info.Key})
-	}
-	if len(rows) > 0 {
-		if err := db.gorm.Create(&rows).Error; err != nil {
-			return err
-		}
-	}
-	return os.Rename(path, path+".migrated")
-}
-
-func readLegacy(path string) ([]byte, bool, error) {
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	return b, true, nil
-}

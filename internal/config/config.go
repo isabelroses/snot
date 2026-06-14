@@ -28,12 +28,13 @@ type Config struct {
 	// ("did:plc:abc=isabel,did:plc:def=alice") overrides/extends it.
 	UserMap map[string]string
 
-	DbDsn      string
-	RepoRoot   string
-	PushRemote string
-	StateDir   string
-	PlcUrl     string
-	Dev        bool
+	DbDsn         string
+	RepoRoot      string
+	PushRemote    string
+	WebhookSecret string // SNOT_WEBHOOK_SECRET / webhook_secret; verifies Forgejo push webhooks
+	StateDir      string
+	PlcUrl        string
+	Dev           bool
 }
 
 // Load reads configuration from the TOML file at path (optional; skipped if
@@ -81,16 +82,17 @@ func loadWith(path string, environ func() []string) (*Config, error) {
 
 	dev, _ := strconv.ParseBool(k.String("dev"))
 	cfg := &Config{
-		Hostname:   k.String("hostname"),
-		ListenAddr: k.String("listen_addr"),
-		OwnerDid:   k.String("owner_did"),
-		UserMap:    users,
-		DbDsn:      k.String("db_dsn"),
-		RepoRoot:   k.String("repo_root"),
-		PushRemote: k.String("push_remote"),
-		StateDir:   k.String("state_dir"),
-		PlcUrl:     k.String("plc_url"),
-		Dev:        dev,
+		Hostname:      k.String("hostname"),
+		ListenAddr:    k.String("listen_addr"),
+		OwnerDid:      k.String("owner_did"),
+		UserMap:       users,
+		DbDsn:         k.String("db_dsn"),
+		RepoRoot:      k.String("repo_root"),
+		PushRemote:    k.String("push_remote"),
+		WebhookSecret: k.String("webhook_secret"),
+		StateDir:      k.String("state_dir"),
+		PlcUrl:        k.String("plc_url"),
+		Dev:           dev,
 	}
 
 	if err := cfg.validate(); err != nil {

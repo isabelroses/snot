@@ -46,6 +46,7 @@ owner_did = "did:plc:abc123"
 db_dsn = "postgres:///forgejo"
 repo_root = "/repos"
 dev = true
+webhook_secret = "hunter2"
 
 [users]
 "did:plc:abc123" = "isabel"
@@ -67,6 +68,9 @@ dev = true
 	}
 	if c.UserMap["did:plc:abc123"] != "isabel" || c.UserMap["did:plc:def456"] != "alice" {
 		t.Errorf("UserMap = %v", c.UserMap)
+	}
+	if c.WebhookSecret != "hunter2" {
+		t.Errorf("WebhookSecret = %q", c.WebhookSecret)
 	}
 }
 

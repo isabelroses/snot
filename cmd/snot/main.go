@@ -4,6 +4,7 @@ import (
 	"github.com/alecthomas/kong"
 )
 
+// Version is overridden at build time via -ldflags "-X main.Version=...".
 var Version = "dev"
 
 type CLI struct {

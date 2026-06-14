@@ -1,4 +1,8 @@
-{ lib, buildGoModule }:
+{
+  lib,
+  buildGoModule,
+  gitMinimal,
+}:
 buildGoModule (finalAttrs: {
   pname = "snot";
   version = "0.1.0";
@@ -7,14 +11,14 @@ buildGoModule (finalAttrs: {
 
   vendorHash = "sha256-b/HJO+zvxFZHr+Z6TEw92VLjaTntaEVhlwFwSa0mLz4=";
 
-  subPackages = [ "cmd/snot" ];
-
   ldflags = [
     "-s"
     "-w"
     "-X main.Version=${finalAttrs.version}"
     "-X github.com/isabelroses/snot/internal/xrpc.version=${finalAttrs.version}"
   ];
+
+  nativeCheckInputs = [ gitMinimal ];
 
   meta = {
     description = "A tangled knot shim backed by a Forgejo instance";

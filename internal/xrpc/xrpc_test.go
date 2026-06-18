@@ -18,14 +18,13 @@ import (
 func newXrpc(t *testing.T) *Xrpc {
 	t.Helper()
 	root := testutil.FixtureRepo(t, "isabel", "demo")
-	rkeys, err := state.LoadRkeyMap(t.TempDir())
+	db, err := state.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	dids, err := state.LoadRepoDids(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	rkeys := db.Rkeys()
+	dids := db.RepoDids()
+	acl := db.ACL()
 	if err := dids.Put("did:plc:repo123", state.RepoDidInfo{User: "isabel", Repo: "demo", Key: []byte("k")}); err != nil {
 		t.Fatal(err)
 	}
@@ -56,8 +55,14 @@ func newXrpc(t *testing.T) *Xrpc {
 		Store:   store,
 		Resolve: rs,
 		Rkeys:   rkeys,
+		ACL:     acl,
 		Logger:  slog.Default(),
 	}
+}
+
+func newTestServer(t *testing.T, x *Xrpc) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(x.Router())
 }
 
 func TestParseRepoParam(t *testing.T) {

@@ -61,7 +61,7 @@ func Open(dir string) (*DB, error) {
 	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
 		return nil, err
 	}
-	if err := gdb.AutoMigrate(&rkeyRow{}, &repoDidRow{}, &eventRow{}); err != nil {
+	if err := gdb.AutoMigrate(&rkeyRow{}, &repoDidRow{}, &eventRow{}, &knotMemberRow{}, &repoCollaboratorRow{}); err != nil {
 		return nil, err
 	}
 	// the db holds PLC rotation keys; keep it owner-only.
@@ -81,3 +81,6 @@ func (db *DB) Rkeys() *RkeyMap { return &RkeyMap{db: db.gorm} }
 
 // RepoDids returns the repo-DID accessor.
 func (db *DB) RepoDids() *RepoDids { return &RepoDids{db: db.gorm} }
+
+// ACL returns the member/collaborator accessor.
+func (db *DB) ACL() *ACL { return &ACL{db: db.gorm} }

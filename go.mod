@@ -12,11 +12,13 @@ require (
 	github.com/go-git/go-git/v5 v5.14.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/knadh/koanf/parsers/toml/v2 v2.2.1
 	github.com/knadh/koanf/providers/confmap v1.0.0
 	github.com/knadh/koanf/providers/env/v2 v2.0.0
+	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.3.5
 	gorm.io/gorm v1.31.1
-	tangled.org/core v0.0.0-20260612103734-ff6d47cfb983
+	tangled.org/core v1.15.0-alpha.0.20260618112045-1f3d6fdc27ee
 )
 
 replace github.com/bluesky-social/indigo => github.com/boltlessengineer/indigo v0.0.0-20260315101958-fb1dfa36fed2
@@ -108,8 +110,6 @@ require (
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
-	github.com/knadh/koanf/parsers/toml/v2 v2.2.1 // indirect
-	github.com/knadh/koanf/providers/file v1.2.1 // indirect
 	github.com/landlock-lsm/go-landlock v0.8.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

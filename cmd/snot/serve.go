@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
+	"slices"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -48,6 +50,11 @@ func (c *ServeCmd) Run(cli *CLI) error {
 	rkeys := db.Rkeys()
 	dids := db.RepoDids()
 
+	acl := db.ACL()
+	if err := acl.SeedMembers(slices.Sorted(maps.Keys(cfg.UserMap))); err != nil {
+		return fmt.Errorf("seed knot members: %w", err)
+	}
+
 	eventStore, err := db.SQL()
 	if err != nil {
 		return fmt.Errorf("event store: %w", err)
@@ -76,10 +83,11 @@ func (c *ServeCmd) Run(cli *CLI) error {
 		Store:   store,
 		Resolve: rs,
 		Rkeys:   rkeys,
+		ACL:     acl,
 		Logger:  logger.With("component", "xrpc"),
 		ServiceAuth: serviceauth.NewServiceAuth(
 			logger.With("component", "serviceauth"),
-			resolver,
+			resolver.Directory(),
 			serviceauth.DidWeb(cfg.Hostname).String(),
 		),
 	}

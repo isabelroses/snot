@@ -26,6 +26,7 @@ type Xrpc struct {
 	Store       forgejo.Store
 	Resolve     *resolve.Resolver
 	Rkeys       *state.RkeyMap
+	ACL         *state.ACL
 	Logger      *slog.Logger
 	ServiceAuth *serviceauth.ServiceAuth // nil in tests: auth middleware skipped
 }
@@ -38,6 +39,10 @@ func (x *Xrpc) Router() http.Handler {
 			r.Use(x.ServiceAuth.VerifyServiceAuth)
 		}
 		r.Post("/"+tangled.RepoCreateNSID, x.CreateRepo)
+		r.Post("/"+tangled.KnotAddMemberNSID, x.AddMember)
+		r.Post("/"+tangled.KnotRemoveMemberNSID, x.RemoveMember)
+		r.Post("/"+tangled.RepoAddCollaboratorNSID, x.AddCollaborator)
+		r.Post("/"+tangled.RepoRemoveCollaboratorNSID, x.RemoveCollaborator)
 	})
 
 	// writes the shim does not support
@@ -71,6 +76,8 @@ func (x *Xrpc) Router() http.Handler {
 
 	// knot/service query endpoints (no auth required)
 	r.Get("/"+tangled.KnotListKeysNSID, x.ListKeys)
+	r.Get("/"+tangled.KnotListMembersNSID, x.ListMembers)
+	r.Get("/"+tangled.RepoListCollaboratorsNSID, x.ListCollaborators)
 	r.Get("/"+tangled.KnotVersionNSID, x.Version)
 	r.Get("/"+tangled.OwnerNSID, x.Owner)
 

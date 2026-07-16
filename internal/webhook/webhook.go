@@ -87,10 +87,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Ref:          push.Ref,
 	}
 
-	if meta, err := h.computeMeta(r.Context(), ownerDid, name, push); err != nil {
+	if err := h.enrich(r.Context(), ownerDid, name, push, &refUpdate); err != nil {
 		h.Logger.Warn("webhook: meta computation failed, emitting without meta", "repo", repoDid, "err", err)
-	} else if meta != nil {
-		refUpdate.Meta = meta
 	}
 
 	eventJson, err := json.Marshal(refUpdate)
@@ -113,21 +111,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// computeMeta builds commit-count + language metadata from the bare repo,
-// mirroring tangled's knotserver. Returns nil (no error) for branch/tag
-// deletes (zero NewSha), matching upstream which only computes meta then.
-func (h *Handler) computeMeta(ctx context.Context, ownerDid, name string, push *pushPayload) (*tangled.GitRefUpdate_Meta, error) {
+// enrich fills in commit-count + language metadata and the changed-file list
+// from the bare repo, mirroring tangled's knotserver. Branch/tag deletes
+// (zero NewSha) are left untouched, matching upstream which only computes
+// these otherwise.
+func (h *Handler) enrich(ctx context.Context, ownerDid, name string, push *pushPayload, ru *tangled.GitRefUpdate) error {
 	newHash := plumbing.NewHash(push.After)
 	if newHash.IsZero() {
-		return nil, nil
+		return nil
 	}
 	_, repoPath, err := h.Resolve.Repo(ctx, ownerDid, name)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	gr, err := tgit.Open(repoPath, push.Ref)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	changedFiles, err := gr.ChangedFilesBetween(push.Before, push.After)
+	if err != nil {
+		return err
 	}
 	meta, err := gr.RefUpdateMeta(tgit.PostReceiveLine{
 		OldSha: plumbing.NewHash(push.Before),
@@ -135,8 +138,10 @@ func (h *Handler) computeMeta(ctx context.Context, ownerDid, name string, push *
 		Ref:    push.Ref,
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	rec := meta.AsRecord()
-	return &rec, nil
+	ru.Meta = &rec
+	ru.ChangedFiles = changedFiles
+	return nil
 }

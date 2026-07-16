@@ -113,6 +113,9 @@ func TestWebhookEmitsRefUpdate(t *testing.T) {
 	if ru.Meta == nil || !ru.Meta.IsDefaultRef {
 		t.Errorf("meta missing or not default ref: %+v", ru.Meta)
 	}
+	if len(ru.ChangedFiles) != 1 || ru.ChangedFiles[0] != "README.md" {
+		t.Errorf("changedFiles = %v, want [README.md]", ru.ChangedFiles)
+	}
 }
 
 func TestWebhookRejectsBadSignature(t *testing.T) {

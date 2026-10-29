@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"tangled.org/core/api/tangled"
+	"tangled.org/core/gitutil"
 	xrpcerr "tangled.org/core/xrpc/errors"
 	"tangled.org/core/xrpc/serviceauth"
 
@@ -20,6 +21,10 @@ import (
 )
 
 const maxResponseKB = 5120
+
+// maxRequestBytes bounds XRPC procedure bodies; every input here is a few
+// DIDs and names.
+const maxRequestBytes = 64 << 10
 
 type Xrpc struct {
 	Cfg         *config.Config
@@ -33,6 +38,12 @@ type Xrpc struct {
 
 func (x *Xrpc) Router() http.Handler {
 	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	r.Group(func(r chi.Router) {
 		if x.ServiceAuth != nil {
@@ -50,7 +61,6 @@ func (x *Xrpc) Router() http.Handler {
 		tangled.RepoSetDefaultBranchNSID,
 		tangled.RepoDeleteBranchNSID,
 		tangled.RepoDeleteNSID,
-		tangled.RepoForkStatusNSID,
 		tangled.RepoForkSyncNSID,
 		tangled.RepoHiddenRefNSID,
 		tangled.RepoMergeNSID,
@@ -91,18 +101,28 @@ func (x *Xrpc) notImplemented(w http.ResponseWriter, r *http.Request) {
 	), http.StatusNotImplemented)
 }
 
+type resolvedRepo struct {
+	path string
+	name gitutil.RepoName
+}
+
 // parseRepoParam resolves the `repo` query parameter (ownerDid/name,
 // ownerDid/rkey, or bare repo DID) to an on-disk repo path. Signature matches
 // upstream so handler files copy verbatim.
 func (x *Xrpc) parseRepoParam(repo string) (string, error) {
-	_, path, err := x.Resolve.RepoFromParam(context.Background(), repo)
+	resolved, err := x.resolveRepo(repo)
+	return resolved.path, err
+}
+
+func (x *Xrpc) resolveRepo(repo string) (resolvedRepo, error) {
+	info, path, err := x.Resolve.RepoFromParam(context.Background(), repo)
 	if errors.Is(err, forgejo.ErrNotFound) {
-		return "", xrpcerr.RepoNotFoundError
+		return resolvedRepo{}, xrpcerr.RepoNotFoundError
 	}
 	if err != nil {
-		return "", xrpcerr.GenericError(err)
+		return resolvedRepo{}, xrpcerr.GenericError(err)
 	}
-	return path, nil
+	return resolvedRepo{path: path, name: gitutil.RepoName(info.Name)}, nil
 }
 
 func writeError(w http.ResponseWriter, e xrpcerr.XrpcError, status int) {

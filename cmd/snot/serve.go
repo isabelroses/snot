@@ -7,7 +7,10 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"os/signal"
 	"slices"
+	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -110,7 +113,7 @@ func (c *ServeCmd) Run(cli *CLI) error {
 	}
 
 	r := chi.NewRouter()
-	r.Use(middleware.RealIP)
+	r.Use(middleware.Recoverer)
 	r.Use(loggingMiddleware(logger))
 	r.Use(corsMiddleware)
 
@@ -122,8 +125,31 @@ func (c *ServeCmd) Run(cli *CLI) error {
 	r.Post("/hooks/forgejo", wh.ServeHTTP)
 	r.Mount("/", gs.Routes())
 
+	// no Read/WriteTimeout: clones and the /events stream are long-lived
+	srv := &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
+	}
+
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	errc := make(chan error, 1)
+	go func() { errc <- srv.ListenAndServe() }()
+
 	logger.Info("starting snot", "addr", cfg.ListenAddr, "hostname", cfg.Hostname)
-	return http.ListenAndServe(cfg.ListenAddr, r)
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+	}
+
+	logger.Info("shutting down")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return srv.Shutdown(shutdownCtx)
 }
 
 func loggingMiddleware(l *slog.Logger) func(http.Handler) http.Handler {

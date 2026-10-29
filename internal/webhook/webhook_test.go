@@ -158,3 +158,59 @@ func TestWebhookSkipsUnpublishedRepo(t *testing.T) {
 		t.Errorf("unpublished repo should emit nothing, got %d", len(events))
 	}
 }
+
+func postSigned(t *testing.T, h *Handler, secret string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/hooks/forgejo", bytes.NewReader(body))
+	req.Header.Set("X-Gitea-Signature", sign(secret, body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestWebhookFailsClosedWithoutSecret(t *testing.T) {
+	h, store, bareDir := newHandler(t)
+	h.Cfg.WebhookSecret = ""
+	body, _ := json.Marshal(map[string]any{
+		"ref": "refs/heads/main", "before": strings.Repeat("0", 40), "after": headSHA(t, bareDir),
+		"repository": map[string]any{"name": "demo", "owner": map[string]any{"username": "isabel"}},
+	})
+	// signed with the empty key, which is what an attacker could also do
+	if rec := postSigned(t, h, "", body); rec.Code != 503 {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	if events, _ := eventstream.List(store, 0, 10); len(events) != 0 {
+		t.Errorf("unsigned webhook emitted %d events", len(events))
+	}
+}
+
+func TestWebhookRejectsOversizedBody(t *testing.T) {
+	h, _, _ := newHandler(t)
+	body := bytes.Repeat([]byte(" "), maxBodyBytes+1)
+	if rec := postSigned(t, h, "s3cr3t", body); rec.Code != 413 {
+		t.Fatalf("code = %d", rec.Code)
+	}
+}
+
+func TestWebhookRejectsMalformedPush(t *testing.T) {
+	h, store, bareDir := newHandler(t)
+	head := headSHA(t, bareDir)
+	zero := strings.Repeat("0", 40)
+	for name, push := range map[string][3]string{
+		"short ref":   {"main", zero, head},
+		"newline ref": {"refs/heads/ma\nin", zero, head},
+		"bad before":  {"refs/heads/main", "nothex", head},
+		"short after": {"refs/heads/main", zero, head[:12]},
+	} {
+		body, _ := json.Marshal(map[string]any{
+			"ref": push[0], "before": push[1], "after": push[2],
+			"repository": map[string]any{"name": "demo", "owner": map[string]any{"username": "isabel"}},
+		})
+		if rec := postSigned(t, h, "s3cr3t", body); rec.Code != 400 {
+			t.Errorf("%s: code = %d", name, rec.Code)
+		}
+	}
+	if events, _ := eventstream.List(store, 0, 10); len(events) != 0 {
+		t.Errorf("malformed pushes emitted %d events", len(events))
+	}
+}

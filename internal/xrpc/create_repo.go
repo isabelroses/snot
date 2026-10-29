@@ -44,6 +44,12 @@ func (x *Xrpc) CreateRepo(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusBadRequest, xrpcerr.GenericError(fmt.Errorf("name and rkey are required")))
 		return
 	}
+	// adopting would silently hand back an unrelated repo of the same name
+	if data.Source != nil {
+		fail(http.StatusBadRequest, xrpcerr.GenericError(fmt.Errorf(
+			"this shim only adopts existing Forgejo repos; %s from a source is unsupported", data.Source.Kind)))
+		return
+	}
 
 	repo, err := x.Store.ResolveRepo(r.Context(), user, data.Name)
 	if errors.Is(err, forgejo.ErrNotFound) {
@@ -53,6 +59,18 @@ func (x *Xrpc) CreateRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		fail(http.StatusInternalServerError, xrpcerr.GenericError(err))
+		return
+	}
+
+	if _, err := syntax.ParseRecordKey(data.Rkey); err != nil {
+		fail(http.StatusBadRequest, xrpcerr.GenericError(fmt.Errorf("invalid rkey: %w", err)))
+		return
+	}
+	// Put overwrites, and rkeys aren't scoped by owner: never let one adopt
+	// re-point an rkey another repo already resolves through
+	if existing, ok := x.Rkeys.RepoByRkey(data.Rkey); ok && existing != repo.Name {
+		fail(http.StatusConflict, xrpcerr.GenericError(fmt.Errorf(
+			"rkey %q is already bound to another repo", data.Rkey)))
 		return
 	}
 

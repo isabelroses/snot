@@ -66,7 +66,7 @@ func (a *ACL) Members() ([]Member, error) {
 	}
 	out := make([]Member, len(rows))
 	for i, r := range rows {
-		out[i] = Member{Subject: r.Subject, AddedBy: r.AddedBy, Created: r.Created}
+		out[i] = Member(r)
 	}
 	return out, nil
 }

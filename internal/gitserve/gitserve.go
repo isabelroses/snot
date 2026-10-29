@@ -18,6 +18,11 @@ import (
 	"github.com/isabelroses/snot/internal/resolve"
 )
 
+// maxRequestBytes bounds an upload-pack/archive request after gzip decoding.
+// Negotiation is want/have lines, so this only ever trips on garbage or a
+// gzip bomb, not a real fetch.
+const maxRequestBytes = 128 << 20
+
 type Handler struct {
 	Cfg      *config.Config
 	Resolve  *resolve.Resolver
@@ -61,8 +66,8 @@ func (h *Handler) resolveDidRedirect(next http.Handler) http.Handler {
 		trimmed := strings.TrimPrefix(didOrHandle, "@")
 		id, err := h.Resolver.ResolveIdent(r.Context(), trimmed)
 		if err != nil {
-			h.Logger.Error("failed to resolve did/handle", "handle", trimmed, "err", err)
-			http.Error(w, fmt.Sprintf("failed to resolve did/handle: %s", trimmed), http.StatusInternalServerError)
+			h.Logger.Warn("failed to resolve did/handle", "handle", trimmed, "err", err)
+			h.notFound(w)
 			return
 		}
 
@@ -156,12 +161,13 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, wantCT, respCT s
 	if r.Header.Get("Content-Encoding") == "gzip" {
 		gz, err := gzip.NewReader(r.Body)
 		if err != nil {
-			gitError(w, err.Error(), http.StatusInternalServerError)
+			gitError(w, "invalid gzip request body", http.StatusBadRequest)
 			return
 		}
 		defer gz.Close()
 		body = gz
 	}
+	body = http.MaxBytesReader(w, body, maxRequestBytes)
 
 	w.Header().Set("Content-Type", respCT)
 	w.Header().Set("Connection", "Keep-Alive")

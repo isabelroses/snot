@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -114,6 +116,36 @@ func TestReadHandlersSmoke(t *testing.T) {
 		if code != 200 {
 			t.Errorf("%s: code=%d body=%v", tc.nsid, code, m)
 		}
+	}
+
+	resp, err := http.Get(srv.URL + "/sh.tangled.repo.archive?" +
+		url.Values{"repo": repo["repo"], "ref": {"main"}, "format": {"tar.gz"}}.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	// gzip magic: the archive actually streamed rather than failing mid-body
+	if resp.StatusCode != 200 || len(archive) < 2 || archive[0] != 0x1f || archive[1] != 0x8b {
+		t.Errorf("archive: code=%d len=%d", resp.StatusCode, len(archive))
+	}
+	if !strings.Contains(resp.Header.Get("Link"), `rel="immutable"`) {
+		t.Errorf("archive Link=%q", resp.Header.Get("Link"))
+	}
+
+	// raw blobs are repo-controlled content served on the knot's origin
+	resp, err = http.Get(srv.URL + "/sh.tangled.repo.blob?" +
+		url.Values{"repo": repo["repo"], "ref": {"main"}, "path": {"README.md"}, "raw": {"true"}}.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawBlob, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || len(rawBlob) == 0 || resp.Header.Get("Content-Length") != strconv.Itoa(len(rawBlob)) {
+		t.Errorf("raw blob: code=%d len=%d content-length=%q", resp.StatusCode, len(rawBlob), resp.Header.Get("Content-Length"))
+	}
+	if resp.Header.Get("X-Content-Type-Options") != "nosniff" || !strings.Contains(resp.Header.Get("Content-Security-Policy"), "sandbox") {
+		t.Errorf("raw blob missing nosniff/CSP: %v", resp.Header)
 	}
 
 	code, _ := getJSON(t, srv, "sh.tangled.repo.branches",

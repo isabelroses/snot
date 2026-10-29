@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/knadh/koanf/parsers/toml/v2"
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/env/v2"
@@ -76,7 +78,11 @@ func loadWith(path string, environ func() []string) (*Config, error) {
 	if users == nil {
 		users = map[string]string{}
 	}
-	for did, user := range parseUserMap(k.String("user_map")) {
+	envUsers, err := parseUserMap(k.String("user_map"))
+	if err != nil {
+		return nil, err
+	}
+	for did, user := range envUsers {
 		users[did] = user
 	}
 
@@ -102,8 +108,9 @@ func loadWith(path string, environ func() []string) (*Config, error) {
 }
 
 // parseUserMap parses the SNOT_USER_MAP override form
-// "did:plc:abc=isabel,did:plc:def=alice".
-func parseUserMap(s string) map[string]string {
+// "did:plc:abc=isabel,did:plc:def=alice". A malformed entry is an error
+// rather than skipped, since a dropped mapping silently unpublishes repos.
+func parseUserMap(s string) (map[string]string, error) {
 	m := map[string]string{}
 	for _, pair := range strings.Split(s, ",") {
 		pair = strings.TrimSpace(pair)
@@ -112,11 +119,11 @@ func parseUserMap(s string) map[string]string {
 		}
 		did, user, ok := strings.Cut(pair, "=")
 		if !ok {
-			continue
+			return nil, fmt.Errorf("SNOT_USER_MAP entry %q is not did=user", pair)
 		}
 		m[strings.TrimSpace(did)] = strings.TrimSpace(user)
 	}
-	return m
+	return m, nil
 }
 
 func (c *Config) validate() error {
@@ -138,6 +145,25 @@ func (c *Config) validate() error {
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))
+	}
+
+	// hostname is interpolated into URLs and the did:web service-auth audience
+	if strings.ContainsAny(c.Hostname, "/?#@ ") || strings.Contains(c.Hostname, "://") {
+		return fmt.Errorf("hostname %q must be a bare host[:port], not a URL", c.Hostname)
+	}
+	if _, err := syntax.ParseDID(c.OwnerDid); err != nil {
+		return fmt.Errorf("owner_did: %w", err)
+	}
+	for did, user := range c.UserMap {
+		if _, err := syntax.ParseDID(did); err != nil {
+			return fmt.Errorf("users: %w", err)
+		}
+		if user == "" {
+			return fmt.Errorf("users: %s maps to an empty Forgejo user", did)
+		}
+	}
+	if u, err := url.Parse(c.PlcUrl); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return fmt.Errorf("plc_url %q must be an http(s) URL", c.PlcUrl)
 	}
 	return nil
 }

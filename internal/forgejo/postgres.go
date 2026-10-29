@@ -29,6 +29,9 @@ func (p *Postgres) Close() {
 	p.pool.Close()
 }
 
+// Every query requires u.visibility = 0 (public; 1 is limited, 2 private): a
+// limited or private Forgejo user hides even their "public" repos and keys,
+// so the shim must too.
 func (p *Postgres) ResolveRepo(ctx context.Context, user, name string) (*Repo, error) {
 	var repo Repo
 	var created int64
@@ -37,7 +40,7 @@ func (p *Postgres) ResolveRepo(ctx context.Context, user, name string) (*Repo, e
 		       r.default_branch, r.created_unix
 		FROM repository r
 		JOIN "user" u ON u.id = r.owner_id
-		WHERE u.lower_name = $1 AND r.lower_name = $2 AND NOT r.is_private`,
+		WHERE u.lower_name = $1 AND r.lower_name = $2 AND NOT r.is_private AND u.visibility = 0`,
 		strings.ToLower(user), strings.ToLower(name),
 	).Scan(&repo.ID, &repo.Name, &repo.OwnerName, &repo.Description, &repo.DefaultBranch, &created)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -76,7 +79,7 @@ func (p *Postgres) PublicKeys(ctx context.Context, user string) ([]PublicKey, er
 		SELECT k.content, k.created_unix
 		FROM public_key k
 		JOIN "user" u ON u.id = k.owner_id
-		WHERE u.lower_name = $1 AND k.type = 1`,
+		WHERE u.lower_name = $1 AND u.visibility = 0 AND k.type = 1`,
 		strings.ToLower(user))
 	if err != nil {
 		return nil, err
@@ -102,7 +105,7 @@ func (p *Postgres) ListRepos(ctx context.Context, user string) ([]Repo, error) {
 		       r.default_branch, r.created_unix
 		FROM repository r
 		JOIN "user" u ON u.id = r.owner_id
-		WHERE u.lower_name = $1 AND NOT r.is_private
+		WHERE u.lower_name = $1 AND NOT r.is_private AND u.visibility = 0
 		ORDER BY r.lower_name`,
 		strings.ToLower(user))
 	if err != nil {

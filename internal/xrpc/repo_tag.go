@@ -44,6 +44,9 @@ func (x *Xrpc) RepoTag(w http.ResponseWriter, r *http.Request) {
 	tags, err := gr.Tags(&git.TagsOptions{
 		Pattern: tagName,
 	})
+	if err != nil {
+		x.Logger.Warn("getting tags", "error", err.Error())
+	}
 
 	if len(tags) != 1 {
 		writeError(w, xrpcerr.NewXrpcError(
@@ -54,11 +57,6 @@ func (x *Xrpc) RepoTag(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tag := tags[0]
-
-	if err != nil {
-		x.Logger.Warn("getting tags", "error", err.Error())
-		tags = []object.Tag{}
-	}
 
 	var target *object.Tag
 	if tag.Target != plumbing.ZeroHash {

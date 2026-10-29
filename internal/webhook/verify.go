@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 // verifySignature checks a Forgejo X-Gitea-Signature (hex HMAC-SHA256 of the
@@ -63,4 +65,29 @@ func (p *pushPayload) pusher() string {
 		return p.Pusher.Username
 	}
 	return p.Pusher.Login
+}
+
+// validate rejects payloads whose ref or SHAs couldn't have come from git,
+// before they reach the bare repo or the event stream.
+func (p *pushPayload) validate() error {
+	if !strings.HasPrefix(p.Ref, "refs/") || strings.ContainsAny(p.Ref, "\x00\n\r") {
+		return fmt.Errorf("ref %q is not a full refname", p.Ref)
+	}
+	for _, sha := range []string{p.Before, p.After} {
+		if !isObjectID(sha) {
+			return fmt.Errorf("%q is not a sha1 or sha256 object id", sha)
+		}
+	}
+	if p.owner() == "" || p.name() == "" {
+		return fmt.Errorf("repository owner and name are required")
+	}
+	return nil
+}
+
+func isObjectID(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
 }

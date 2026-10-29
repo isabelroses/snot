@@ -38,37 +38,55 @@ func (x *Xrpc) ListCollaborators(w http.ResponseWriter, r *http.Request) {
 			Subject:   c.Subject,
 			AddedBy:   c.AddedBy,
 			CreatedAt: c.Created,
+			// no consent model here: a grant takes effect when it's added
+			EffectiveSince: c.Created,
 		})
 	}
-	x.writeJson(w, tangled.RepoListCollaborators_Output{Items: items})
+	total := int64(len(items))
+	x.writeJson(w, tangled.RepoListCollaborators_Output{Items: items, Total: &total})
+}
+
+// collabTarget parses a collaborator mutation and authorizes it: like
+// upstream, only the repo's owner (or the knot owner) manages its collaborators.
+func (x *Xrpc) collabTarget(r *http.Request, repo, subject string) (actorDid, repoDid, subjectDid syntax.DID, status int, e *xrpcerr.XrpcError) {
+	fail := func(status int, err xrpcerr.XrpcError) (syntax.DID, syntax.DID, syntax.DID, int, *xrpcerr.XrpcError) {
+		return "", "", "", status, &err
+	}
+	actorDid, autherr := actor(r)
+	if autherr != nil {
+		return fail(http.StatusForbidden, *autherr)
+	}
+	repoDid, err := syntax.ParseDID(repo)
+	if err != nil {
+		return fail(http.StatusBadRequest, xrpcerr.InvalidRepoError(repo))
+	}
+	info, ok := x.Resolve.Dids.Get(repoDid.String())
+	if !ok {
+		return fail(http.StatusNotFound, xrpcerr.RepoNotFoundError)
+	}
+	ownerDid, mapped := x.Resolve.DidFor(info.User)
+	if actorDid.String() != x.Cfg.OwnerDid && (!mapped || actorDid.String() != ownerDid) {
+		return fail(http.StatusForbidden, xrpcerr.AccessControlError(actorDid.String()))
+	}
+	subjectDid, err = syntax.ParseDID(subject)
+	if err != nil {
+		return fail(http.StatusBadRequest, xrpcerr.GenericError(err))
+	}
+	return actorDid, repoDid, subjectDid, 0, nil
 }
 
 func (x *Xrpc) AddCollaborator(w http.ResponseWriter, r *http.Request) {
-	actor, autherr := x.requireMember(r)
-	if autherr != nil {
-		writeError(w, *autherr, http.StatusForbidden)
-		return
-	}
 	var data tangled.RepoAddCollaborator_Input
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		writeError(w, xrpcerr.GenericError(err), http.StatusBadRequest)
 		return
 	}
-	repoDid, err := syntax.ParseDID(data.Repo)
-	if err != nil {
-		writeError(w, xrpcerr.InvalidRepoError(data.Repo), http.StatusBadRequest)
+	actorDid, repoDid, subject, status, xerr := x.collabTarget(r, data.Repo, data.Subject)
+	if xerr != nil {
+		writeError(w, *xerr, status)
 		return
 	}
-	if _, ok := x.Resolve.Dids.Get(repoDid.String()); !ok {
-		writeError(w, xrpcerr.RepoNotFoundError, http.StatusNotFound)
-		return
-	}
-	subject, err := syntax.ParseDID(data.Subject)
-	if err != nil {
-		writeError(w, xrpcerr.GenericError(err), http.StatusBadRequest)
-		return
-	}
-	if err := x.ACL.AddCollaborator(repoDid.String(), subject.String(), actor.String()); err != nil {
+	if err := x.ACL.AddCollaborator(repoDid.String(), subject.String(), actorDid.String()); err != nil {
 		writeError(w, xrpcerr.GenericError(err), http.StatusInternalServerError)
 		return
 	}
@@ -76,27 +94,14 @@ func (x *Xrpc) AddCollaborator(w http.ResponseWriter, r *http.Request) {
 }
 
 func (x *Xrpc) RemoveCollaborator(w http.ResponseWriter, r *http.Request) {
-	if _, autherr := x.requireMember(r); autherr != nil {
-		writeError(w, *autherr, http.StatusForbidden)
-		return
-	}
 	var data tangled.RepoRemoveCollaborator_Input
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		writeError(w, xrpcerr.GenericError(err), http.StatusBadRequest)
 		return
 	}
-	repoDid, err := syntax.ParseDID(data.Repo)
-	if err != nil {
-		writeError(w, xrpcerr.InvalidRepoError(data.Repo), http.StatusBadRequest)
-		return
-	}
-	if _, ok := x.Resolve.Dids.Get(repoDid.String()); !ok {
-		writeError(w, xrpcerr.RepoNotFoundError, http.StatusNotFound)
-		return
-	}
-	subject, err := syntax.ParseDID(data.Subject)
-	if err != nil {
-		writeError(w, xrpcerr.GenericError(err), http.StatusBadRequest)
+	_, repoDid, subject, status, xerr := x.collabTarget(r, data.Repo, data.Subject)
+	if xerr != nil {
+		writeError(w, *xerr, status)
 		return
 	}
 	if err := x.ACL.RemoveCollaborator(repoDid.String(), subject.String()); err != nil {

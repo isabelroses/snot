@@ -30,23 +30,28 @@ func (x *Xrpc) ListMembers(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: m.Created,
 		})
 	}
-	x.writeJson(w, tangled.KnotListMembers_Output{Items: items})
+	total := int64(len(items))
+	x.writeJson(w, tangled.KnotListMembers_Output{Items: items, Total: &total})
 }
 
-// requireMember authorizes a mutation: the service-auth actor must be a
-// current knot member. Returns the actor DID or an error to write.
-func (x *Xrpc) requireMember(r *http.Request) (syntax.DID, *xrpcerr.XrpcError) {
+// actor returns the service-auth actor DID the middleware attached.
+func actor(r *http.Request) (syntax.DID, *xrpcerr.XrpcError) {
 	actorDid, ok := r.Context().Value(serviceauth.ActorDid).(syntax.DID)
 	if !ok {
 		e := xrpcerr.MissingActorDidError
 		return "", &e
 	}
-	member, err := x.ACL.IsMember(actorDid.String())
-	if err != nil {
-		e := xrpcerr.GenericError(err)
-		return "", &e
+	return actorDid, nil
+}
+
+// requireKnotOwner authorizes knot-membership changes: like upstream, only the
+// knot owner may invite or remove members.
+func (x *Xrpc) requireKnotOwner(r *http.Request) (syntax.DID, *xrpcerr.XrpcError) {
+	actorDid, e := actor(r)
+	if e != nil {
+		return "", e
 	}
-	if !member {
+	if actorDid.String() != x.Cfg.OwnerDid {
 		e := xrpcerr.AccessControlError(actorDid.String())
 		return "", &e
 	}
@@ -54,7 +59,7 @@ func (x *Xrpc) requireMember(r *http.Request) (syntax.DID, *xrpcerr.XrpcError) {
 }
 
 func (x *Xrpc) AddMember(w http.ResponseWriter, r *http.Request) {
-	actor, autherr := x.requireMember(r)
+	actorDid, autherr := x.requireKnotOwner(r)
 	if autherr != nil {
 		writeError(w, *autherr, http.StatusForbidden)
 		return
@@ -69,7 +74,7 @@ func (x *Xrpc) AddMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, xrpcerr.GenericError(err), http.StatusBadRequest)
 		return
 	}
-	if err := x.ACL.AddMember(subject.String(), actor.String()); err != nil {
+	if err := x.ACL.AddMember(subject.String(), actorDid.String()); err != nil {
 		writeError(w, xrpcerr.GenericError(err), http.StatusInternalServerError)
 		return
 	}
@@ -77,7 +82,7 @@ func (x *Xrpc) AddMember(w http.ResponseWriter, r *http.Request) {
 }
 
 func (x *Xrpc) RemoveMember(w http.ResponseWriter, r *http.Request) {
-	if _, autherr := x.requireMember(r); autherr != nil {
+	if _, autherr := x.requireKnotOwner(r); autherr != nil {
 		writeError(w, *autherr, http.StatusForbidden)
 		return
 	}

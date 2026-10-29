@@ -2,12 +2,13 @@ package xrpc
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"fmt"
+	"errors"
+	"io"
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,7 +63,7 @@ func (x *Xrpc) RepoBlob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contents, err := gr.RawContent(treePath)
+	file, err := gr.File(treePath)
 	if err != nil {
 		x.Logger.Error("file content", "error", err.Error(), "treePath", treePath)
 		writeError(w, xrpcerr.NewXrpcError(
@@ -71,8 +72,29 @@ func (x *Xrpc) RepoBlob(w http.ResponseWriter, r *http.Request) {
 		), http.StatusNotFound)
 		return
 	}
+	// the JSON form can't fit past maxResponseKB (base64 only grows it), so
+	// refuse before reading the blob into memory
+	if !raw && file.Size > maxResponseKB*1024 {
+		writeError(w, xrpcerr.RequestTooLargeError, http.StatusRequestEntityTooLarge)
+		return
+	}
+	reader, err := file.Reader()
+	if err != nil {
+		writeError(w, xrpcerr.GenericError(err), http.StatusInternalServerError)
+		return
+	}
+	defer reader.Close()
 
-	mimeType := http.DetectContentType(contents)
+	// DetectContentType only looks at the first 512 bytes
+	head := make([]byte, 512)
+	n, err := io.ReadFull(reader, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		writeError(w, xrpcerr.GenericError(err), http.StatusInternalServerError)
+		return
+	}
+	head = head[:n]
+
+	mimeType := http.DetectContentType(head)
 
 	// override MIME types for formats that http.DetectContentType does not recognize
 	switch filepath.Ext(treePath) {
@@ -87,8 +109,12 @@ func (x *Xrpc) RepoBlob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if raw {
-		contentHash := sha256.Sum256(contents)
-		eTag := fmt.Sprintf("\"%x\"", contentHash)
+		// blob ids are content hashes, so they make a stable ETag for free
+		eTag := `"` + file.Hash.String() + `"`
+		// raw blobs are repo-controlled: never sniff, and sandbox anything
+		// (svg) that a browser would otherwise run on the knot's origin
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox")
 
 		switch {
 		case strings.HasPrefix(mimeType, "image/"), strings.HasPrefix(mimeType, "video/"):
@@ -117,9 +143,20 @@ func (x *Xrpc) RepoBlob(w http.ResponseWriter, r *http.Request) {
 			), http.StatusForbidden)
 			return
 		}
-		w.Write(contents)
+		w.Header().Set("Content-Length", strconv.FormatInt(file.Size, 10))
+		w.Write(head)
+		if _, err := io.Copy(w, reader); err != nil {
+			x.Logger.Error("streaming raw blob", "error", err.Error(), "treePath", treePath)
+		}
 		return
 	}
+
+	rest, err := io.ReadAll(reader)
+	if err != nil {
+		writeError(w, xrpcerr.GenericError(err), http.StatusInternalServerError)
+		return
+	}
+	contents := append(head, rest...)
 
 	isTextual := func(mt string) bool {
 		return strings.HasPrefix(mt, "text/") || isTextualMimeType(mt)

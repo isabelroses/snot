@@ -3,6 +3,7 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,6 +20,9 @@ import (
 	"github.com/isabelroses/snot/internal/resolve"
 )
 
+// maxBodyBytes bounds a push payload; Forgejo's are a few KB per commit.
+const maxBodyBytes = 5 << 20
+
 type Handler struct {
 	Cfg      *config.Config
 	Resolve  *resolve.Resolver
@@ -28,20 +32,28 @@ type Handler struct {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 5<<20))
+	// unsigned webhooks would let anyone forge push events into /events
+	if h.Cfg.WebhookSecret == "" {
+		h.Logger.Warn("webhook: rejected, SNOT_WEBHOOK_SECRET unset")
+		http.Error(w, "webhooks disabled: webhook_secret is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "read error", http.StatusBadRequest)
 		return
 	}
 
-	if h.Cfg.WebhookSecret != "" {
-		if !verifySignature(h.Cfg.WebhookSecret, body, r.Header.Get("X-Gitea-Signature")) {
-			h.Logger.Warn("webhook: bad signature")
-			http.Error(w, "bad signature", http.StatusUnauthorized)
-			return
-		}
-	} else {
-		h.Logger.Warn("webhook: SNOT_WEBHOOK_SECRET unset; accepting unsigned webhook")
+	if !verifySignature(h.Cfg.WebhookSecret, body, r.Header.Get("X-Gitea-Signature")) {
+		h.Logger.Warn("webhook: bad signature")
+		http.Error(w, "bad signature", http.StatusUnauthorized)
+		return
 	}
 
 	push, err := parsePush(body)
@@ -52,6 +64,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if push.Ref == "" {
 		// not a push event (e.g. ping); ack and ignore.
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if err := push.validate(); err != nil {
+		h.Logger.Warn("webhook: rejected push payload", "err", err)
+		http.Error(w, "bad payload: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 

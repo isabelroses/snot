@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"testing"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
@@ -48,7 +49,15 @@ func TestListCollaborators(t *testing.T) {
 	}
 	items := m["items"].([]any)
 	if len(items) != 1 || items[0].(map[string]any)["subject"] != "did:plc:bob" {
-		t.Errorf("items=%v", items)
+		t.Fatalf("items=%v", items)
+	}
+	// effectiveSince is required by the lexicon; with no consent model it's the add time
+	item := items[0].(map[string]any)
+	if item["effectiveSince"] == nil || item["effectiveSince"] != item["createdAt"] {
+		t.Errorf("effectiveSince=%v createdAt=%v", item["effectiveSince"], item["createdAt"])
+	}
+	if m["total"] != float64(1) {
+		t.Errorf("total=%v", m["total"])
 	}
 
 	// unknown repoDid → 400
@@ -72,19 +81,24 @@ func postAs(t *testing.T, h func(http.ResponseWriter, *http.Request), actor stri
 	return rec
 }
 
-func TestAddMemberRequiresMemberActor(t *testing.T) {
-	x := newXrpc(t)
+func TestAddMemberRequiresKnotOwner(t *testing.T) {
+	x := newXrpc(t) // newXrpc's cfg.OwnerDid is did:plc:knotadmin
 	_ = x.ACL.SeedMembers([]string{"did:plc:owner123"})
 
-	// non-member actor → 403
-	rec := postAs(t, x.AddMember, "did:plc:intruder", tangled.KnotAddMember_Input{Subject: "did:plc:new"})
-	if rec.Code != 403 {
-		t.Fatalf("non-member add: code=%d", rec.Code)
+	// non-member and plain member alike → 403; membership is the knot owner's call
+	for _, actor := range []string{"did:plc:intruder", "did:plc:owner123"} {
+		rec := postAs(t, x.AddMember, actor, tangled.KnotAddMember_Input{Subject: "did:plc:new"})
+		if rec.Code != 403 {
+			t.Fatalf("%s add: code=%d", actor, rec.Code)
+		}
 	}
-	// member actor → 200, new member appears
-	rec = postAs(t, x.AddMember, "did:plc:owner123", tangled.KnotAddMember_Input{Subject: "did:plc:new"})
+	if ok, _ := x.ACL.IsMember("did:plc:new"); ok {
+		t.Fatal("refused add still added the member")
+	}
+	// knot owner → 200, new member appears
+	rec := postAs(t, x.AddMember, "did:plc:knotadmin", tangled.KnotAddMember_Input{Subject: "did:plc:new"})
 	if rec.Code != 200 {
-		t.Fatalf("member add: code=%d body=%s", rec.Code, rec.Body)
+		t.Fatalf("owner add: code=%d body=%s", rec.Code, rec.Body)
 	}
 	if ok, _ := x.ACL.IsMember("did:plc:new"); !ok {
 		t.Error("new member not added")
@@ -94,9 +108,16 @@ func TestAddMemberRequiresMemberActor(t *testing.T) {
 func TestRemoveMemberRefusesConfigSeeded(t *testing.T) {
 	x := newXrpc(t) // newXrpc's cfg.UserMap maps did:plc:owner123 -> isabel
 	_ = x.ACL.SeedMembers([]string{"did:plc:owner123"})
+	_ = x.ACL.AddMember("did:plc:extra", "did:plc:knotadmin")
+
+	// a plain member can't remove anyone → 403
+	rec := postAs(t, x.RemoveMember, "did:plc:owner123", tangled.KnotRemoveMember_Input{Subject: "did:plc:extra"})
+	if rec.Code != 403 {
+		t.Fatalf("member remove: code=%d", rec.Code)
+	}
 
 	// removing the config-seeded owner → 400, still a member
-	rec := postAs(t, x.RemoveMember, "did:plc:owner123", tangled.KnotRemoveMember_Input{Subject: "did:plc:owner123"})
+	rec = postAs(t, x.RemoveMember, "did:plc:knotadmin", tangled.KnotRemoveMember_Input{Subject: "did:plc:owner123"})
 	if rec.Code != 400 {
 		t.Fatalf("remove config member: code=%d", rec.Code)
 	}
@@ -104,9 +125,8 @@ func TestRemoveMemberRefusesConfigSeeded(t *testing.T) {
 		t.Error("config owner must remain a member")
 	}
 
-	// add then remove an extra member → 200
-	_ = x.ACL.AddMember("did:plc:extra", "did:plc:owner123")
-	rec = postAs(t, x.RemoveMember, "did:plc:owner123", tangled.KnotRemoveMember_Input{Subject: "did:plc:extra"})
+	// knot owner removes an extra member → 200
+	rec = postAs(t, x.RemoveMember, "did:plc:knotadmin", tangled.KnotRemoveMember_Input{Subject: "did:plc:extra"})
 	if rec.Code != 200 {
 		t.Fatalf("remove extra: code=%d", rec.Code)
 	}
@@ -135,7 +155,38 @@ func TestAddCollaborator(t *testing.T) {
 	}
 }
 
-func TestVersionAdvertisesKnotACL(t *testing.T) {
+func TestCollaboratorsRequireRepoOwner(t *testing.T) {
+	x := newXrpc(t) // did:plc:repo123 belongs to isabel, i.e. did:plc:owner123
+	_ = x.ACL.SeedMembers([]string{"did:plc:owner123", "did:plc:other"})
+
+	// another knot member must not grant themselves access to someone's repo
+	rec := postAs(t, x.AddCollaborator, "did:plc:other",
+		tangled.RepoAddCollaborator_Input{Repo: "did:plc:repo123", Subject: "did:plc:other"})
+	if rec.Code != 403 {
+		t.Fatalf("non-owner add: code=%d body=%s", rec.Code, rec.Body)
+	}
+	if cs, _ := x.ACL.Collaborators("did:plc:repo123"); len(cs) != 0 {
+		t.Fatalf("refused add still granted: %+v", cs)
+	}
+
+	// the knot owner may manage any repo's collaborators
+	rec = postAs(t, x.AddCollaborator, "did:plc:knotadmin",
+		tangled.RepoAddCollaborator_Input{Repo: "did:plc:repo123", Subject: "did:plc:bob"})
+	if rec.Code != 200 {
+		t.Fatalf("knot owner add: code=%d body=%s", rec.Code, rec.Body)
+	}
+
+	rec = postAs(t, x.RemoveCollaborator, "did:plc:other",
+		tangled.RepoRemoveCollaborator_Input{Repo: "did:plc:repo123", Subject: "did:plc:bob"})
+	if rec.Code != 403 {
+		t.Fatalf("non-owner remove: code=%d", rec.Code)
+	}
+	if cs, _ := x.ACL.Collaborators("did:plc:repo123"); len(cs) != 1 {
+		t.Fatalf("refused remove still revoked: %+v", cs)
+	}
+}
+
+func TestVersionAdvertisesCapabilities(t *testing.T) {
 	srv := newTestServer(t, newXrpc(t))
 	defer srv.Close()
 	code, m := getJSON(t, srv, "sh.tangled.knot.version", nil)
@@ -143,13 +194,9 @@ func TestVersionAdvertisesKnotACL(t *testing.T) {
 		t.Fatalf("code=%d", code)
 	}
 	caps, _ := m["capabilities"].([]any)
-	found := false
-	for _, c := range caps {
-		if c == "knot-acl" {
-			found = true
+	for _, want := range []string{"knot-acl", "repo-did-input"} {
+		if !slices.Contains(caps, any(want)) {
+			t.Errorf("version capabilities missing %s: %v", want, caps)
 		}
-	}
-	if !found {
-		t.Errorf("version capabilities missing knot-acl: %v", m["capabilities"])
 	}
 }

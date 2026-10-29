@@ -86,6 +86,41 @@ func TestCreateRepoRejectsMissingRepo(t *testing.T) {
 	}
 }
 
+func TestCreateRepoRejectsSource(t *testing.T) {
+	x := newXrpc(t)
+	// "demo" exists, so without the check a fork would adopt it instead
+	rec := postCreate(t, x, "did:plc:owner123", tangled.RepoCreate_Input{
+		Rkey: "3l5forkrkey", Name: "demo",
+		Source: &tangled.RepoCreate_Source{Url: "https://knot.example/did:plc:other/demo", Kind: "fork"},
+	})
+	if rec.Code == 200 {
+		t.Fatalf("a fork must not adopt the same-named repo; body=%s", rec.Body)
+	}
+	if got, _ := x.Rkeys.RepoByRkey("3l5forkrkey"); got != "" {
+		t.Errorf("rejected fork still recorded rkey -> %q", got)
+	}
+}
+
+func TestCreateRepoRejectsBadRkeys(t *testing.T) {
+	x := newXrpc(t)
+	if rec := postCreate(t, x, "did:plc:owner123",
+		tangled.RepoCreate_Input{Rkey: "../../etc", Name: "demo"}); rec.Code == 200 {
+		t.Errorf("invalid rkey accepted; body=%s", rec.Body)
+	}
+
+	// an rkey already bound to one repo must not be re-pointed at another
+	if err := x.Rkeys.Put("3l5taken", "other"); err != nil {
+		t.Fatal(err)
+	}
+	rec := postCreate(t, x, "did:plc:owner123", tangled.RepoCreate_Input{Rkey: "3l5taken", Name: "demo"})
+	if rec.Code != 409 {
+		t.Fatalf("rebinding rkey: code=%d body=%s", rec.Code, rec.Body)
+	}
+	if got, _ := x.Rkeys.RepoByRkey("3l5taken"); got != "other" {
+		t.Errorf("rkey re-pointed to %q", got)
+	}
+}
+
 func TestCreateRepoRejectsUnmappedActor(t *testing.T) {
 	x := newXrpc(t)
 	// neither a stranger nor the knot admin may adopt: only mapped DIDs,

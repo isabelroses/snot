@@ -117,3 +117,34 @@ func TestLoadMissingRequired(t *testing.T) {
 		t.Fatal("expected error for missing required config")
 	}
 }
+
+func TestLoadRejectsInvalidValues(t *testing.T) {
+	valid := map[string]string{
+		"SNOT_HOSTNAME":  "knot.example.com",
+		"SNOT_OWNER_DID": "did:plc:abc123",
+		"SNOT_USER_MAP":  "did:plc:abc123=isabel",
+		"SNOT_DB_DSN":    "postgres:///forgejo",
+		"SNOT_REPO_ROOT": "/var/lib/forgejo/repositories",
+	}
+	if _, err := loadEnv(t, valid); err != nil {
+		t.Fatalf("baseline config rejected: %v", err)
+	}
+	for name, override := range map[string][2]string{
+		"url hostname":       {"SNOT_HOSTNAME", "https://knot.example.com"},
+		"path hostname":      {"SNOT_HOSTNAME", "knot.example.com/x"},
+		"bad owner did":      {"SNOT_OWNER_DID", "abc123"},
+		"bad user map did":   {"SNOT_USER_MAP", "plc:abc123=isabel"},
+		"empty forgejo user": {"SNOT_USER_MAP", "did:plc:abc123="},
+		"entry without =":    {"SNOT_USER_MAP", "did:plc:abc123=isabel,did:plc:def456"},
+		"non-http plc url":   {"SNOT_PLC_URL", "file:///etc/passwd"},
+	} {
+		env := map[string]string{}
+		for k, v := range valid {
+			env[k] = v
+		}
+		env[override[0]] = override[1]
+		if _, err := loadEnv(t, env); err == nil {
+			t.Errorf("%s: %s=%q was accepted", name, override[0], override[1])
+		}
+	}
+}

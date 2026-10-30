@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"tangled.org/core/api/tangled"
@@ -20,6 +21,8 @@ import (
 	"github.com/isabelroses/snot/internal/resolve"
 )
 
+const publishRetryDelay = 5 * time.Second
+
 // maxBodyBytes bounds a push payload; Forgejo's are a few KB per commit.
 const maxBodyBytes = 5 << 20
 
@@ -29,6 +32,10 @@ type Handler struct {
 	Store    eventstream.Store
 	Notifier *notifier.Notifier
 	Logger   *slog.Logger
+	// Publish republishes the repo's org.tangled.git.refs record; nil skips.
+	Publish interface {
+		SyncRepo(ctx context.Context, repoDid string) error
+	}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +132,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.Logger.Info("webhook: emitted refUpdate", "repo", repoDid, "ref", push.Ref, "new", push.After)
+
+	// The refs record is what knotmirror fetches from. A failure is not
+	// surfaced to Forgejo: its redelivery would duplicate the event above
+	// (and any CI it triggers), so retry here and let the periodic resync
+	// converge if that fails too.
+	if h.Publish != nil {
+		if err := h.Publish.SyncRepo(r.Context(), repoDid); err != nil {
+			h.Logger.Error("webhook: publishing refs, retrying", "repo", repoDid, "err", err)
+			go h.retryPublish(repoDid)
+		}
+	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) retryPublish(repoDid string) {
+	time.Sleep(publishRetryDelay)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := h.Publish.SyncRepo(ctx, repoDid); err != nil {
+		h.Logger.Error("webhook: publishing refs failed again; awaiting resync", "repo", repoDid, "err", err)
+	}
 }
 
 // enrich fills in commit-count + language metadata and the changed-file list

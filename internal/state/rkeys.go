@@ -38,3 +38,8 @@ func (r *RkeyMap) RkeyByRepo(repoName string) (string, bool) {
 	}
 	return row.Rkey, true
 }
+
+// Delete drops an rkey binding.
+func (r *RkeyMap) Delete(rkey string) error {
+	return r.db.Where("rkey = ?", rkey).Delete(&rkeyRow{}).Error
+}

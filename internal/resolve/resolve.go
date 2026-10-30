@@ -67,7 +67,7 @@ func (rs *Resolver) RepoFromParam(ctx context.Context, param string) (*forgejo.R
 		return nil, "", forgejo.ErrNotFound
 	}
 	info, ok := rs.Dids.Get(param)
-	if !ok {
+	if !ok || info.Deleted {
 		return nil, "", forgejo.ErrNotFound
 	}
 	// Defense: require the owner DID is still mapped.

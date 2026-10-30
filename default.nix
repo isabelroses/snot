@@ -9,7 +9,7 @@ buildGoModule (finalAttrs: {
 
   src = ./.;
 
-  vendorHash = "sha256-8rYVDpFHOM3BfIB4roTvk5pxG7W8lm/jKyHTDbqkv+M=";
+  vendorHash = "sha256-CTlUyvDemiKHDhM6zsGInlcFNl49W2C5mXP9pZORQLc=";
 
   ldflags = [
     "-s"

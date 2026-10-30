@@ -78,6 +78,7 @@ func (x *Xrpc) AddMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, xrpcerr.GenericError(err), http.StatusInternalServerError)
 		return
 	}
+	x.republishKnot(r.Context())
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -108,5 +109,6 @@ func (x *Xrpc) RemoveMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, xrpcerr.GenericError(err), http.StatusInternalServerError)
 		return
 	}
+	x.republishKnot(r.Context())
 	w.WriteHeader(http.StatusOK)
 }

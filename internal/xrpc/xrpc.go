@@ -34,6 +34,7 @@ type Xrpc struct {
 	ACL         *state.ACL
 	Logger      *slog.Logger
 	ServiceAuth *serviceauth.ServiceAuth // nil in tests: auth middleware skipped
+	Publish     Publisher                // nil in tests: records not republished
 }
 
 func (x *Xrpc) Router() http.Handler {
@@ -54,6 +55,13 @@ func (x *Xrpc) Router() http.Handler {
 		r.Post("/"+tangled.KnotRemoveMemberNSID, x.RemoveMember)
 		r.Post("/"+tangled.RepoAddCollaboratorNSID, x.AddCollaborator)
 		r.Post("/"+tangled.RepoRemoveCollaboratorNSID, x.RemoveCollaborator)
+
+		// knot2-era writes
+		r.Post("/"+CreateRepoNSID, x.CreateRepoV2)
+		r.Post("/"+DeleteRepoNSID, x.DeleteRepo)
+		r.Post("/"+CreateRecordNSID, x.CreateRecord)
+		r.Post("/"+DeleteRecordNSID, x.DeleteRecord)
+		r.Post("/"+PutRecordNSID, x.PutRecord)
 	})
 
 	// writes the shim does not support
@@ -65,6 +73,10 @@ func (x *Xrpc) Router() http.Handler {
 		tangled.RepoHiddenRefNSID,
 		tangled.RepoMergeNSID,
 		tangled.RepoMergeCheckNSID,
+		GitSetDefaultBranchNSID,
+		GitDeleteBranchNSID,
+		MintTokenNSID,
+		ReserveKeyNSID,
 	} {
 		r.Post("/"+nsid, x.notImplemented)
 	}
@@ -89,6 +101,7 @@ func (x *Xrpc) Router() http.Handler {
 	r.Get("/"+tangled.KnotListMembersNSID, x.ListMembers)
 	r.Get("/"+tangled.RepoListCollaboratorsNSID, x.ListCollaborators)
 	r.Get("/"+tangled.KnotVersionNSID, x.Version)
+	r.Get("/"+DescribeKnotNSID, x.DescribeKnot)
 	r.Get("/"+tangled.OwnerNSID, x.Owner)
 
 	return r

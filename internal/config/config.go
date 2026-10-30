@@ -37,6 +37,23 @@ type Config struct {
 	StateDir      string
 	PlcUrl        string
 	Dev           bool
+
+	// Crawlers are relays sent com.atproto.sync.requestCrawl on startup so
+	// they (and hydrant behind them) subscribe to this knot's firehose.
+	// SNOT_CRAWLERS is comma-separated; an empty value disables announcing.
+	Crawlers []string
+}
+
+// defaultCrawlers is knot2's KNOT_CRAWLERS default.
+var defaultCrawlers = []string{
+	"https://relay.fire.hose.cam",
+	"https://relay3.fr.hose.cam",
+	"https://bsky.network",
+	"https://northamerica.firehose.network",
+	"https://europe.firehose.network",
+	"https://asia.firehose.network",
+	"https://atproto.africa",
+	"https://relay.upcloud.world",
 }
 
 // Load reads configuration from the TOML file at path (optional; skipped if
@@ -87,6 +104,29 @@ func loadWith(path string, environ func() []string) (*Config, error) {
 	}
 
 	dev, _ := strconv.ParseBool(k.String("dev"))
+
+	// dev knots are unreachable from public relays, so default to silence
+	crawlers := defaultCrawlers
+	if dev {
+		crawlers = nil
+	}
+	if k.Exists("crawlers") {
+		crawlers = nil
+		switch v := k.Get("crawlers").(type) {
+		case []any:
+			for _, c := range v {
+				if s, ok := c.(string); ok && strings.TrimSpace(s) != "" {
+					crawlers = append(crawlers, strings.TrimSpace(s))
+				}
+			}
+		default:
+			for _, c := range strings.Split(k.String("crawlers"), ",") {
+				if c = strings.TrimSpace(c); c != "" {
+					crawlers = append(crawlers, c)
+				}
+			}
+		}
+	}
 	cfg := &Config{
 		Hostname:      k.String("hostname"),
 		ListenAddr:    k.String("listen_addr"),
@@ -99,6 +139,7 @@ func loadWith(path string, environ func() []string) (*Config, error) {
 		StateDir:      k.String("state_dir"),
 		PlcUrl:        k.String("plc_url"),
 		Dev:           dev,
+		Crawlers:      crawlers,
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -160,6 +201,11 @@ func (c *Config) validate() error {
 		}
 		if user == "" {
 			return fmt.Errorf("users: %s maps to an empty Forgejo user", did)
+		}
+	}
+	for _, crawler := range c.Crawlers {
+		if u, err := url.Parse(crawler); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return fmt.Errorf("crawlers: %q must be an http(s) URL", crawler)
 		}
 	}
 	if u, err := url.Parse(c.PlcUrl); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {

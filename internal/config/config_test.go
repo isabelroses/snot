@@ -148,3 +148,75 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		}
 	}
 }
+
+func baseEnv(extra map[string]string) map[string]string {
+	env := map[string]string{
+		"SNOT_HOSTNAME":  "knot.example.com",
+		"SNOT_OWNER_DID": "did:plc:abc123",
+		"SNOT_USER_MAP":  "did:plc:abc123=isabel",
+		"SNOT_DB_DSN":    "postgres:///forgejo",
+		"SNOT_REPO_ROOT": "/repos",
+	}
+	for k, v := range extra {
+		env[k] = v
+	}
+	return env
+}
+
+func TestCrawlers(t *testing.T) {
+	c, err := loadEnv(t, baseEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Crawlers) != len(defaultCrawlers) {
+		t.Errorf("default crawlers = %v", c.Crawlers)
+	}
+
+	c, err = loadEnv(t, baseEnv(map[string]string{"SNOT_DEV": "true"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Crawlers) != 0 {
+		t.Errorf("dev knots should not announce, got %v", c.Crawlers)
+	}
+
+	c, err = loadEnv(t, baseEnv(map[string]string{"SNOT_CRAWLERS": "https://a.example, https://b.example"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Crawlers) != 2 || c.Crawlers[1] != "https://b.example" {
+		t.Errorf("crawlers = %v", c.Crawlers)
+	}
+
+	c, err = loadEnv(t, baseEnv(map[string]string{"SNOT_CRAWLERS": ""}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Crawlers) != 0 {
+		t.Errorf("empty SNOT_CRAWLERS should disable announcing, got %v", c.Crawlers)
+	}
+
+	if _, err := loadEnv(t, baseEnv(map[string]string{"SNOT_CRAWLERS": "relay.example"})); err == nil {
+		t.Error("a crawler without a scheme should be rejected")
+	}
+}
+
+func TestCrawlersFromTOML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snot.toml")
+	os.WriteFile(path, []byte(`
+hostname = "knot.example.com"
+owner_did = "did:plc:abc123"
+db_dsn = "postgres:///forgejo"
+repo_root = "/repos"
+crawlers = ["https://relay.example"]
+[users]
+"did:plc:abc123" = "isabel"
+`), 0o600)
+	c, err := loadWith(path, func() []string { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Crawlers) != 1 || c.Crawlers[0] != "https://relay.example" {
+		t.Errorf("crawlers = %v", c.Crawlers)
+	}
+}

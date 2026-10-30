@@ -18,10 +18,13 @@ import (
 	"tangled.org/core/notifier"
 	"tangled.org/core/xrpc/serviceauth"
 
+	"github.com/isabelroses/snot/internal/atrepo"
 	"github.com/isabelroses/snot/internal/config"
 	"github.com/isabelroses/snot/internal/events"
 	"github.com/isabelroses/snot/internal/forgejo"
 	"github.com/isabelroses/snot/internal/gitserve"
+	"github.com/isabelroses/snot/internal/pds"
+	"github.com/isabelroses/snot/internal/publish"
 	"github.com/isabelroses/snot/internal/repodid"
 	"github.com/isabelroses/snot/internal/resolve"
 	"github.com/isabelroses/snot/internal/state"
@@ -81,6 +84,32 @@ func (c *ServeCmd) Run(cli *CLI) error {
 
 	resolver := idresolver.DefaultResolver(cfg.PlcUrl)
 
+	knotKey, err := db.KnotKey()
+	if err != nil {
+		return fmt.Errorf("knot signing key: %w", err)
+	}
+	atStore, err := atrepo.New(db.Gorm())
+	if err != nil {
+		return fmt.Errorf("atrepo: %w", err)
+	}
+	knotDid := "did:web:" + cfg.Hostname
+	pub := &publish.Publisher{
+		Store:   atStore,
+		Resolve: rs,
+		ACL:     acl,
+		KnotDid: knotDid,
+		KnotKey: knotKey,
+		Logger:  logger.With("component", "publish"),
+	}
+	ph := &pds.Handler{
+		Store:    atStore,
+		Hostname: cfg.Hostname,
+		BaseURL:  base,
+		KnotKey:  knotKey,
+		PlcUrl:   cfg.PlcUrl,
+		Logger:   logger.With("component", "pds"),
+	}
+
 	x := &xrpc.Xrpc{
 		Cfg:     cfg,
 		Store:   store,
@@ -93,6 +122,7 @@ func (c *ServeCmd) Run(cli *CLI) error {
 			resolver.Directory(),
 			serviceauth.DidWeb(cfg.Hostname).String(),
 		),
+		Publish: pub,
 	}
 
 	gs := &gitserve.Handler{
@@ -110,6 +140,7 @@ func (c *ServeCmd) Run(cli *CLI) error {
 		Store:    eventStore,
 		Notifier: &n,
 		Logger:   logger.With("component", "webhook"),
+		Publish:  pub,
 	}
 
 	r := chi.NewRouter()
@@ -120,7 +151,11 @@ func (c *ServeCmd) Run(cli *CLI) error {
 	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, "this is snot, a tangled knot backed by forgejo.\n")
 	})
-	r.Mount("/xrpc", x.Router())
+	ph.WellKnown(r)
+	xr := chi.NewRouter()
+	ph.Routes(xr)
+	xr.Mount("/", x.Router())
+	r.Mount("/xrpc", xr)
 	r.Get("/events", events.Handler(eventStore, &n, logger.With("component", "events")))
 	r.Post("/hooks/forgejo", wh.ServeHTTP)
 	r.Mount("/", gs.Routes())
@@ -136,6 +171,14 @@ func (c *ServeCmd) Run(cli *CLI) error {
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	go (&background{
+		cfg:    cfg,
+		base:   base,
+		pub:    pub,
+		dids:   dids,
+		logger: logger.With("component", "background"),
+	}).run(ctx)
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 

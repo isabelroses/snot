@@ -5,11 +5,14 @@ package state
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 
+	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
@@ -27,6 +30,8 @@ type repoDidRow struct {
 	User string `gorm:"index:idx_repodid_user_repo"`
 	Repo string `gorm:"index:idx_repodid_user_repo"`
 	Key  []byte
+	// Deleted is NOT NULL so pre-existing rows migrate to false.
+	Deleted bool `gorm:"not null;default:false"`
 }
 
 func (repoDidRow) TableName() string { return "repo_dids" }
@@ -39,6 +44,14 @@ type eventRow struct {
 }
 
 func (eventRow) TableName() string { return "events" }
+
+// kvRow holds singleton secrets such as the knot's signing key.
+type kvRow struct {
+	Key   string `gorm:"primaryKey"`
+	Value []byte
+}
+
+func (kvRow) TableName() string { return "kv" }
 
 // DB owns snot's persistent SQLite store and hands out typed accessors.
 type DB struct {
@@ -61,7 +74,7 @@ func Open(dir string) (*DB, error) {
 	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
 		return nil, err
 	}
-	if err := gdb.AutoMigrate(&rkeyRow{}, &repoDidRow{}, &eventRow{}, &knotMemberRow{}, &repoCollaboratorRow{}); err != nil {
+	if err := gdb.AutoMigrate(&rkeyRow{}, &repoDidRow{}, &eventRow{}, &knotMemberRow{}, &repoCollaboratorRow{}, &kvRow{}); err != nil {
 		return nil, err
 	}
 	// the db holds PLC rotation keys; keep it owner-only.
@@ -78,6 +91,36 @@ func (db *DB) SQL() (*sql.DB, error) {
 
 // Rkeys returns the rkey↔repo accessor.
 func (db *DB) Rkeys() *RkeyMap { return &RkeyMap{db: db.gorm} }
+
+// Gorm exposes the database to packages that keep their own tables in it.
+func (db *DB) Gorm() *gorm.DB { return db.gorm }
+
+// KnotKey returns the knot's did:web signing key, generating and persisting a
+// K-256 key on first use. Like repo DID keys it must be backed up: losing it
+// invalidates every member record the knot has signed.
+func (db *DB) KnotKey() (*atcrypto.PrivateKeyK256, error) {
+	var row kvRow
+	err := db.gorm.First(&row, "key = ?", "knot_signing_key").Error
+	if err == nil {
+		return atcrypto.ParsePrivateBytesK256(row.Value)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	key, err := atcrypto.GeneratePrivateKeyK256()
+	if err != nil {
+		return nil, err
+	}
+	row = kvRow{Key: "knot_signing_key", Value: key.Bytes()}
+	// DoNothing + reread keeps a concurrent first start from forking keys.
+	if err := db.gorm.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+		return nil, err
+	}
+	if err := db.gorm.First(&row, "key = ?", "knot_signing_key").Error; err != nil {
+		return nil, err
+	}
+	return atcrypto.ParsePrivateBytesK256(row.Value)
+}
 
 // RepoDids returns the repo-DID accessor.
 func (db *DB) RepoDids() *RepoDids { return &RepoDids{db: db.gorm} }

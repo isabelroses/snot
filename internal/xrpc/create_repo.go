@@ -84,6 +84,7 @@ func (x *Xrpc) CreateRepo(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusInternalServerError, xrpcerr.GenericError(err))
 		return
 	}
+	x.republishRepo(r.Context(), repoDid)
 	l.Info("adopted repo", "repo", repo.Name, "rkey", data.Rkey, "repoDid", repoDid)
 	x.writeJson(w, tangled.RepoCreate_Output{RepoDid: &repoDid})
 }

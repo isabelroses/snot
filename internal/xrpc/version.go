@@ -6,16 +6,13 @@ import (
 	"runtime/debug"
 
 	"tangled.org/core/api/tangled"
-	"tangled.org/core/consts"
 )
 
 // version is set during build time.
 var version string
 
-var knotCapabilities = []string{
-	string(consts.CapKnotACL),
-	string(consts.CapRepoDidInput),
-}
+// knotCapabilities is the legacy sh.tangled.knot.version list.
+var knotCapabilities = []string{"knot-acl", "repo-did-input"}
 
 func (x *Xrpc) Version(w http.ResponseWriter, r *http.Request) {
 	if version == "" {

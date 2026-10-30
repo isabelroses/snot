@@ -18,7 +18,7 @@ func (x *Xrpc) ListCollaborators(w http.ResponseWriter, r *http.Request) {
 		writeError(w, xrpcerr.InvalidRepoError(subject), http.StatusBadRequest)
 		return
 	}
-	if _, ok := x.Resolve.Dids.Get(repoDid.String()); !ok {
+	if info, ok := x.Resolve.Dids.Get(repoDid.String()); !ok || info.Deleted {
 		writeError(w, xrpcerr.InvalidRepoError(subject), http.StatusBadRequest)
 		return
 	}
@@ -61,7 +61,7 @@ func (x *Xrpc) collabTarget(r *http.Request, repo, subject string) (actorDid, re
 		return fail(http.StatusBadRequest, xrpcerr.InvalidRepoError(repo))
 	}
 	info, ok := x.Resolve.Dids.Get(repoDid.String())
-	if !ok {
+	if !ok || info.Deleted {
 		return fail(http.StatusNotFound, xrpcerr.RepoNotFoundError)
 	}
 	ownerDid, mapped := x.Resolve.DidFor(info.User)
@@ -90,6 +90,7 @@ func (x *Xrpc) AddCollaborator(w http.ResponseWriter, r *http.Request) {
 		writeError(w, xrpcerr.GenericError(err), http.StatusInternalServerError)
 		return
 	}
+	x.republishRepo(r.Context(), repoDid.String())
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -108,5 +109,6 @@ func (x *Xrpc) RemoveCollaborator(w http.ResponseWriter, r *http.Request) {
 		writeError(w, xrpcerr.GenericError(err), http.StatusInternalServerError)
 		return
 	}
+	x.republishRepo(r.Context(), repoDid.String())
 	w.WriteHeader(http.StatusOK)
 }

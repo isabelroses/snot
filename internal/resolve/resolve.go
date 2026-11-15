@@ -59,8 +59,8 @@ func (rs *Resolver) RepoFromParam(ctx context.Context, param string) (*forgejo.R
 	if !strings.HasPrefix(param, "did:") {
 		return nil, "", forgejo.ErrNotFound
 	}
-	if i := strings.Index(param, "/"); i >= 0 {
-		return rs.Repo(ctx, param[:i], param[i+1:])
+	if ownerDid, nameOrRkey, ok := strings.Cut(param, "/"); ok {
+		return rs.Repo(ctx, ownerDid, nameOrRkey)
 	}
 	// Bare repo DID — look up in persisted mapping.
 	if rs.Dids == nil {

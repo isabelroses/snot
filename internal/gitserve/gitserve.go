@@ -80,22 +80,15 @@ func (h *Handler) resolveDidRedirect(next http.Handler) http.Handler {
 	})
 }
 
-func (h *Handler) repoPath(r *http.Request) (string, *forgejo.Repo, error) {
+// resolveRepo resolves the request's repo and its on-disk path from either
+// URL form: /{repoDid} or /{ownerDid}/{name}.
+func (h *Handler) resolveRepo(r *http.Request) (*forgejo.Repo, string, error) {
 	did := chi.URLParam(r, "did")
 	name := chi.URLParam(r, "name")
-
 	if name == "" {
-		repo, path, err := h.Resolve.RepoFromParam(r.Context(), did)
-		if err != nil {
-			return "", nil, err
-		}
-		return path, repo, nil
+		return h.Resolve.RepoFromParam(r.Context(), did)
 	}
-	repo, path, err := h.Resolve.Repo(r.Context(), did, name)
-	if err != nil {
-		return "", nil, err
-	}
-	return path, repo, nil
+	return h.Resolve.Repo(r.Context(), did, name)
 }
 
 func (h *Handler) notFound(w http.ResponseWriter) {
@@ -105,7 +98,7 @@ func (h *Handler) notFound(w http.ResponseWriter) {
 }
 
 func (h *Handler) InfoRefs(w http.ResponseWriter, r *http.Request) {
-	repoPath, repo, err := h.repoPath(r)
+	repo, repoPath, err := h.resolveRepo(r)
 	if err != nil {
 		h.notFound(w)
 		return
@@ -146,7 +139,7 @@ func (h *Handler) UploadArchive(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serve(w http.ResponseWriter, r *http.Request, wantCT, respCT string, run func(*service.ServiceCommand) error) {
-	repoPath, _, err := h.repoPath(r)
+	_, repoPath, err := h.resolveRepo(r)
 	if err != nil {
 		h.notFound(w)
 		return
@@ -186,7 +179,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, wantCT, respCT s
 }
 
 func (h *Handler) ReceivePack(w http.ResponseWriter, r *http.Request) {
-	_, repo, err := h.repoPath(r)
+	repo, _, err := h.resolveRepo(r)
 	if err != nil {
 		h.notFound(w)
 		return

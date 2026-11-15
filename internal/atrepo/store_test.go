@@ -3,6 +3,7 @@ package atrepo
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"path/filepath"
 	"testing"
 
@@ -13,6 +14,8 @@ import (
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/events"
 	"github.com/glebarez/sqlite"
+	"github.com/ipfs/go-cid"
+	cbor "github.com/ipfs/go-ipld-cbor"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -289,5 +292,38 @@ func TestSetActiveAndRestartKeepsSeqIncreasing(t *testing.T) {
 	after, _ := s2.LastSeq()
 	if after <= last {
 		t.Fatalf("seq went backwards across restart: %d then %d", last, after)
+	}
+}
+
+// TestEncodeCARLayout pins the CARv1 framing byte for byte: a header section,
+// then one varint-prefixed cid||data section per block, in the order given.
+func TestEncodeCARLayout(t *testing.T) {
+	var rows []blockRow
+	for _, data := range [][]byte{{0xa0}, bytes.Repeat([]byte{0x40}, 70_000), {}} {
+		c, err := cborCid(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows = append(rows, blockRow{Cid: c.String(), Data: data})
+	}
+	root, _ := cid.Decode(rows[0].Cid)
+	header, err := cbor.DumpObject(map[string]any{"roots": []cid.Cid{root}, "version": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := binary.AppendUvarint(nil, uint64(len(header)))
+	want = append(want, header...)
+	for _, b := range rows {
+		c, _ := cid.Decode(b.Cid)
+		want = binary.AppendUvarint(want, uint64(len(c.Bytes())+len(b.Data)))
+		want = append(want, c.Bytes()...)
+		want = append(want, b.Data...)
+	}
+	got, err := encodeCAR(root, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("CAR is %d bytes, want %d; layouts differ", len(got), len(want))
 	}
 }

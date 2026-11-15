@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"log/slog"
-	"net/http"
 	"strings"
 	"time"
 
@@ -28,11 +25,12 @@ type background struct {
 }
 
 // run backfills records for every repo, then announces the firehose to
-// relays (so hydrant sees the backfill), then resyncs periodically.
+// relays (so hydrant sees the backfill) once the server is listening, then
+// resyncs periodically.
 func (b *background) run(ctx context.Context) {
 	b.resync(ctx)
 	b.upgradeDids(ctx)
-	b.requestCrawl(ctx)
+	requestCrawls(ctx, b.cfg.ListenAddr, b.cfg.Crawlers, b.cfg.Hostname, crawlRetryPause, b.logger)
 
 	t := time.NewTicker(resyncInterval)
 	defer t.Stop()
@@ -75,30 +73,5 @@ func (b *background) upgradeDids(ctx context.Context) {
 		case changed:
 			b.logger.Info("added tangled_knot service to repo DID", "did", did)
 		}
-	}
-}
-
-func (b *background) requestCrawl(ctx context.Context) {
-	body, _ := json.Marshal(map[string]string{"hostname": b.cfg.Hostname})
-	client := &http.Client{Timeout: 30 * time.Second}
-	for _, crawler := range b.cfg.Crawlers {
-		url := strings.TrimSuffix(crawler, "/") + "/xrpc/com.atproto.sync.requestCrawl"
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-		if err != nil {
-			b.logger.Warn("requestCrawl", "crawler", url, "err", err)
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if err != nil {
-			b.logger.Warn("requestCrawl failed", "crawler", url, "err", err)
-			continue
-		}
-		resp.Body.Close()
-		if resp.StatusCode >= 300 {
-			b.logger.Warn("requestCrawl refused", "crawler", url, "status", resp.Status)
-			continue
-		}
-		b.logger.Info("requested crawl", "crawler", url)
 	}
 }

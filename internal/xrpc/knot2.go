@@ -32,7 +32,7 @@ const (
 )
 
 // wireVersion is the knot protocol version knot2 reports in describeKnot.
-const wireVersion = "v1.2.0"
+const wireVersion = "v1.20.0"
 
 // describeKnotCapabilities deliberately omits knot-social-writes: without it
 // the appview hosts issues and pulls on a foster knot, which a Forgejo shim
@@ -46,8 +46,9 @@ type Publisher interface {
 	SyncKnot(ctx context.Context) error
 }
 
-// republish runs after a successful state change. Failures are logged, not
-// returned: the change itself stands, and the periodic resync converges.
+// republishRepo and republishKnot run after a successful state change.
+// Failures are logged, not returned: the change itself stands, and the
+// periodic resync converges.
 func (x *Xrpc) republishRepo(ctx context.Context, repoDid string) {
 	if x.Publish == nil {
 		return
@@ -123,14 +124,25 @@ func (x *Xrpc) CreateRepoV2(w http.ResponseWriter, r *http.Request) {
 
 	out := map[string]any{"did": repoDid}
 	if info, ok := x.Resolve.Dids.Get(repoDid); ok {
-		if key, err := atcrypto.ParsePrivateBytesK256(info.Key); err == nil {
-			if pub, err := key.PublicKey(); err == nil {
-				out["key"] = pub.Multibase()
-			}
+		if key, err := publicKeyMultibase(info.Key); err == nil {
+			out["key"] = key
 		}
 	}
 	x.Logger.Info("adopted repo", "repo", repo.Name, "repoDid", repoDid)
 	x.writeJson(w, out)
+}
+
+// publicKeyMultibase renders the public half of a raw K-256 private key.
+func publicKeyMultibase(rawKey []byte) (string, error) {
+	key, err := atcrypto.ParsePrivateBytesK256(rawKey)
+	if err != nil {
+		return "", err
+	}
+	pub, err := key.PublicKey()
+	if err != nil {
+		return "", err
+	}
+	return pub.Multibase(), nil
 }
 
 // adoptable authorizes adopting name: any mapped DID may adopt its own
@@ -176,8 +188,7 @@ func (x *Xrpc) DeleteRepo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, xrpcerr.RepoNotFoundError, http.StatusNotFound)
 		return
 	}
-	ownerDid, mapped := x.Resolve.DidFor(info.User)
-	if actorDid.String() != x.Cfg.OwnerDid && (!mapped || actorDid.String() != ownerDid) {
+	if !x.managesRepo(actorDid, info) {
 		writeError(w, xrpcerr.AccessControlError(actorDid.String()), http.StatusForbidden)
 		return
 	}

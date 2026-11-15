@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"sort"
+	"slices"
+	"strings"
 
 	comatproto "github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/events"
@@ -27,22 +28,34 @@ func encodeCAR(root cid.Cid, rows []blockRow) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var buf bytes.Buffer
-	writeSection(&buf, header)
+	// sized up front: a refs record alone can approach a megabyte
+	size := binary.MaxVarintLen64 + len(header)
+	for _, b := range rows {
+		size += binary.MaxVarintLen64 + len(b.Cid) + len(b.Data)
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, size))
+	writeSection(buf, header)
 	for _, b := range rows {
 		c, err := cid.Decode(b.Cid)
 		if err != nil {
 			return nil, err
 		}
-		writeSection(&buf, append(c.Bytes(), b.Data...))
+		writeSection(buf, c.Bytes(), b.Data)
 	}
 	return buf.Bytes(), nil
 }
 
-func writeSection(buf *bytes.Buffer, data []byte) {
+// writeSection writes one length-prefixed CAR section made of parts.
+func writeSection(buf *bytes.Buffer, parts ...[]byte) {
+	var size int
+	for _, p := range parts {
+		size += len(p)
+	}
 	var n [binary.MaxVarintLen64]byte
-	buf.Write(n[:binary.PutUvarint(n[:], uint64(len(data)))])
-	buf.Write(data)
+	buf.Write(n[:binary.PutUvarint(n[:], uint64(size))])
+	for _, p := range parts {
+		buf.Write(p)
+	}
 }
 
 // encodeFrame renders one subscribeRepos message: a {op, t} header followed by
@@ -102,7 +115,9 @@ func (m *memBlockstore) sorted() []blocks.Block {
 	for _, b := range m.blocks {
 		out = append(out, b)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Cid().KeyString() < out[j].Cid().KeyString() })
+	slices.SortFunc(out, func(a, b blocks.Block) int {
+		return strings.Compare(a.Cid().KeyString(), b.Cid().KeyString())
+	})
 	return out
 }
 
@@ -136,7 +151,7 @@ func (m *memBlockstore) Put(_ context.Context, b blocks.Block) error {
 	return nil
 }
 
-func (m *memBlockstore) PutMany(ctx context.Context, bs []blocks.Block) error {
+func (m *memBlockstore) PutMany(_ context.Context, bs []blocks.Block) error {
 	for _, b := range bs {
 		m.blocks[b.Cid()] = b
 	}

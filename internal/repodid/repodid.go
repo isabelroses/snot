@@ -6,6 +6,7 @@ package repodid
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/url"
 
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
@@ -109,12 +110,8 @@ func EnsureServices(ctx context.Context, plcURL, did string, rawKey []byte, knot
 		Services:            map[string]didplc.OpService{},
 		Prev:                ptr(last.CID().String()),
 	}
-	for id, svc := range last.Services {
-		next.Services[id] = svc
-	}
-	for id, svc := range want {
-		next.Services[id] = svc
-	}
+	maps.Copy(next.Services, last.Services)
+	maps.Copy(next.Services, want)
 	if err := next.Sign(key); err != nil {
 		return false, fmt.Errorf("signing update op: %w", err)
 	}

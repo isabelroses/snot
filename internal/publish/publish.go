@@ -12,10 +12,11 @@ package publish
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -42,8 +43,11 @@ const (
 
 	// maxRefsBytes mirrors the lexicon's maxLength; knot2 publishes no refs
 	// record at all for a repo past it rather than a truncated one.
-	maxRefsBytes         = 1_000_000
-	maxDescriptionLength = 140
+	maxRefsBytes = 1_000_000
+	// maxDefaultBranchBytes is the lexicon's maxLength for defaultBranch; like
+	// knot2, a longer HEAD branch is published as "main".
+	maxDefaultBranchBytes = 244
+	maxDescriptionLength  = 140
 )
 
 type Publisher struct {
@@ -199,41 +203,46 @@ func refsRecord(path, fallbackBranch string) (*atrepo.Record, error) {
 			defaultBranch = name.Short()
 		}
 	}
-	if defaultBranch == "" {
+	if defaultBranch == "" || len(defaultBranch) > maxDefaultBranchBytes {
 		defaultBranch = "main"
 	}
 
-	type line struct{ name, hash string }
+	type line struct {
+		name string
+		hash plumbing.Hash
+	}
 	var lines []line
+	size := 0 // of the snapshot: "<hex hash> <name>\n" per ref
 	iter, err := r.References()
 	if err != nil {
 		return nil, err
 	}
 	err = iter.ForEach(func(ref *plumbing.Reference) error {
-		if ref.Type() == plumbing.HashReference && publicRef(ref.Name().String()) {
-			lines = append(lines, line{ref.Name().String(), ref.Hash().String()})
+		if name := ref.Name().String(); ref.Type() == plumbing.HashReference && publicRef(name) {
+			lines = append(lines, line{name, ref.Hash()})
+			size += hex.EncodedLen(len(ref.Hash())) + len(name) + 2
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(lines, func(i, j int) bool { return lines[i].name < lines[j].name })
-
-	var b strings.Builder
-	for _, l := range lines {
-		b.WriteString(l.hash)
-		b.WriteByte(' ')
-		b.WriteString(l.name)
-		b.WriteByte('\n')
-	}
-	if b.Len() > maxRefsBytes {
+	if size > maxRefsBytes {
 		return nil, nil
+	}
+	slices.SortFunc(lines, func(a, b line) int { return strings.Compare(a.name, b.name) })
+
+	refs := make([]byte, 0, size)
+	for _, l := range lines {
+		refs = hex.AppendEncode(refs, l.hash[:])
+		refs = append(refs, ' ')
+		refs = append(refs, l.name...)
+		refs = append(refs, '\n')
 	}
 	return &atrepo.Record{
 		Collection: RefsNSID,
 		Rkey:       selfRkey,
-		Value:      map[string]any{"defaultBranch": defaultBranch, "refs": atdata.Bytes(b.String())},
+		Value:      map[string]any{"defaultBranch": defaultBranch, "refs": atdata.Bytes(refs)},
 	}, nil
 }
 

@@ -65,7 +65,7 @@ func (h *Handler) subscribeRepos(w http.ResponseWriter, r *http.Request) {
 	last := head
 	if cursor != nil {
 		if *cursor > head {
-			if frame, err := encodeErrorFrame("FutureCursor", "cursor is ahead of this knot's stream"); err == nil {
+			if frame, err := atrepo.ErrorFrame("FutureCursor", "cursor is ahead of this knot's stream"); err == nil {
 				conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 				conn.WriteMessage(websocket.BinaryMessage, frame)
 			}
@@ -103,5 +103,3 @@ func (h *Handler) subscribeRepos(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-
-func encodeErrorFrame(name, msg string) ([]byte, error) { return atrepo.ErrorFrame(name, msg) }

@@ -1,4 +1,5 @@
-// forgejo/forgejo.go
+// Package forgejo reads the public repos, languages and SSH keys of a Forgejo
+// instance straight from its database.
 package forgejo
 
 import (

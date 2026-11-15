@@ -7,6 +7,8 @@ import (
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"tangled.org/core/api/tangled"
 	xrpcerr "tangled.org/core/xrpc/errors"
+
+	"github.com/isabelroses/snot/internal/state"
 )
 
 // ListCollaborators returns a repo's collaborators. Open endpoint;
@@ -64,8 +66,7 @@ func (x *Xrpc) collabTarget(r *http.Request, repo, subject string) (actorDid, re
 	if !ok || info.Deleted {
 		return fail(http.StatusNotFound, xrpcerr.RepoNotFoundError)
 	}
-	ownerDid, mapped := x.Resolve.DidFor(info.User)
-	if actorDid.String() != x.Cfg.OwnerDid && (!mapped || actorDid.String() != ownerDid) {
+	if !x.managesRepo(actorDid, info) {
 		return fail(http.StatusForbidden, xrpcerr.AccessControlError(actorDid.String()))
 	}
 	subjectDid, err = syntax.ParseDID(subject)
@@ -73,6 +74,16 @@ func (x *Xrpc) collabTarget(r *http.Request, repo, subject string) (actorDid, re
 		return fail(http.StatusBadRequest, xrpcerr.GenericError(err))
 	}
 	return actorDid, repoDid, subjectDid, 0, nil
+}
+
+// managesRepo reports whether actorDid may administer the repo: the knot
+// owner, or the DID mapped to the repo's Forgejo user.
+func (x *Xrpc) managesRepo(actorDid syntax.DID, info state.RepoDidInfo) bool {
+	if actorDid.String() == x.Cfg.OwnerDid {
+		return true
+	}
+	ownerDid, mapped := x.Resolve.DidFor(info.User)
+	return mapped && actorDid.String() == ownerDid
 }
 
 func (x *Xrpc) AddCollaborator(w http.ResponseWriter, r *http.Request) {

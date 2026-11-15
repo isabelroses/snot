@@ -99,10 +99,7 @@ func (x *Xrpc) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	}
 	// Config-seeded members (SNOT_USER_MAP) are permanent.
 	if _, configManaged := x.Cfg.UserMap[subject.String()]; configManaged {
-		writeError(w, xrpcerr.NewXrpcError(
-			xrpcerr.WithTag("InvalidRequest"),
-			xrpcerr.WithMessage("member is config-managed (SNOT_USER_MAP) and cannot be removed"),
-		), http.StatusBadRequest)
+		writeError(w, invalid("member is config-managed (SNOT_USER_MAP) and cannot be removed"), http.StatusBadRequest)
 		return
 	}
 	if err := x.ACL.RemoveMember(subject.String()); err != nil {

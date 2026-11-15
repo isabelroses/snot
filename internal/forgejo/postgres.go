@@ -1,4 +1,3 @@
-// forgejo/postgres.go
 package forgejo
 
 import (

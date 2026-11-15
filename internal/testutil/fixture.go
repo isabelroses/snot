@@ -1,4 +1,5 @@
-// internal/testutil/fixture.go
+// Package testutil provides the Forgejo store stub and git fixtures the
+// package tests share.
 package testutil
 
 import (
@@ -51,7 +52,7 @@ func (s *StubStore) ListRepos(_ context.Context, _ string) ([]forgejo.Repo, erro
 
 // FixtureRepo creates {root}/{owner}/{name}.git as a bare repo containing one
 // commit (README.md on branch main) and returns the repo root directory.
-func FixtureRepo(t *testing.T, owner, name string) (root string) {
+func FixtureRepo(t testing.TB, owner, name string) (root string) {
 	t.Helper()
 	root = t.TempDir()
 	work := filepath.Join(t.TempDir(), "work")

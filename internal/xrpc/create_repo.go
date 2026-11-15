@@ -9,7 +9,6 @@ import (
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"tangled.org/core/api/tangled"
 	xrpcerr "tangled.org/core/xrpc/errors"
-	"tangled.org/core/xrpc/serviceauth"
 
 	"github.com/isabelroses/snot/internal/forgejo"
 )
@@ -23,9 +22,9 @@ func (x *Xrpc) CreateRepo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, e, status)
 	}
 
-	actorDid, ok := r.Context().Value(serviceauth.ActorDid).(syntax.DID)
-	if !ok {
-		fail(http.StatusBadRequest, xrpcerr.MissingActorDidError)
+	actorDid, autherr := actor(r)
+	if autherr != nil {
+		fail(http.StatusBadRequest, *autherr)
 		return
 	}
 	// Any mapped DID may adopt — within its own Forgejo user's repos.

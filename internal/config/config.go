@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"strconv"
@@ -46,6 +47,7 @@ type Config struct {
 
 // defaultCrawlers is knot2's KNOT_CRAWLERS default.
 var defaultCrawlers = []string{
+	"https://index.tangled.network",
 	"https://relay.fire.hose.cam",
 	"https://relay3.fr.hose.cam",
 	"https://bsky.network",
@@ -99,9 +101,7 @@ func loadWith(path string, environ func() []string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	for did, user := range envUsers {
-		users[did] = user
-	}
+	maps.Copy(users, envUsers)
 
 	dev, _ := strconv.ParseBool(k.String("dev"))
 
@@ -111,21 +111,7 @@ func loadWith(path string, environ func() []string) (*Config, error) {
 		crawlers = nil
 	}
 	if k.Exists("crawlers") {
-		crawlers = nil
-		switch v := k.Get("crawlers").(type) {
-		case []any:
-			for _, c := range v {
-				if s, ok := c.(string); ok && strings.TrimSpace(s) != "" {
-					crawlers = append(crawlers, strings.TrimSpace(s))
-				}
-			}
-		default:
-			for _, c := range strings.Split(k.String("crawlers"), ",") {
-				if c = strings.TrimSpace(c); c != "" {
-					crawlers = append(crawlers, c)
-				}
-			}
-		}
+		crawlers = configuredCrawlers(k)
 	}
 	cfg := &Config{
 		Hostname:      k.String("hostname"),
@@ -146,6 +132,27 @@ func loadWith(path string, environ func() []string) (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// configuredCrawlers reads an explicit crawlers setting: a TOML array, or the
+// comma-separated SNOT_CRAWLERS form. Blank entries are dropped.
+func configuredCrawlers(k *koanf.Koanf) []string {
+	var crawlers []string
+	switch v := k.Get("crawlers").(type) {
+	case []any:
+		for _, c := range v {
+			if s, ok := c.(string); ok && strings.TrimSpace(s) != "" {
+				crawlers = append(crawlers, strings.TrimSpace(s))
+			}
+		}
+	default:
+		for _, c := range strings.Split(k.String("crawlers"), ",") {
+			if c = strings.TrimSpace(c); c != "" {
+				crawlers = append(crawlers, c)
+			}
+		}
+	}
+	return crawlers
 }
 
 // parseUserMap parses the SNOT_USER_MAP override form
@@ -204,12 +211,17 @@ func (c *Config) validate() error {
 		}
 	}
 	for _, crawler := range c.Crawlers {
-		if u, err := url.Parse(crawler); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		if !isHTTPURL(crawler) {
 			return fmt.Errorf("crawlers: %q must be an http(s) URL", crawler)
 		}
 	}
-	if u, err := url.Parse(c.PlcUrl); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+	if !isHTTPURL(c.PlcUrl) {
 		return fmt.Errorf("plc_url %q must be an http(s) URL", c.PlcUrl)
 	}
 	return nil
+}
+
+func isHTTPURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != ""
 }

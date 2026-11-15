@@ -12,7 +12,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -121,13 +122,6 @@ type Record struct {
 // Path returns the record's MST key.
 func (r Record) Path() string { return r.Collection + "/" + r.Rkey }
 
-// Exists reports whether the store hosts did.
-func (s *Store) Exists(did string) (bool, error) {
-	var n int64
-	err := s.db.Model(&accountRow{}).Where("did = ?", did).Count(&n).Error
-	return n > 0, err
-}
-
 // Sync makes did's repo hold exactly the desired records, creating the repo
 // (identity, account, genesis commit, then a #sync assertion) if it is new.
 // It reports whether anything was committed.
@@ -135,34 +129,16 @@ func (s *Store) Sync(ctx context.Context, did string, key atcrypto.PrivateKey, d
 	if _, err := syntax.ParseDID(did); err != nil {
 		return false, err
 	}
-	want := make(map[string]recordRow, len(desired))
-	for _, rec := range desired {
-		if _, err := syntax.ParseNSID(rec.Collection); err != nil {
-			return false, fmt.Errorf("record %s: %w", rec.Path(), err)
-		}
-		if _, err := syntax.ParseRecordKey(rec.Rkey); err != nil {
-			return false, fmt.Errorf("record %s: %w", rec.Path(), err)
-		}
-		value := map[string]any{"$type": rec.Collection}
-		for k, v := range rec.Value {
-			value[k] = v
-		}
-		raw, err := atdata.MarshalCBOR(value)
-		if err != nil {
-			return false, fmt.Errorf("encoding %s: %w", rec.Path(), err)
-		}
-		c, err := cborCid(raw)
-		if err != nil {
-			return false, err
-		}
-		want[rec.Path()] = recordRow{Did: did, Collection: rec.Collection, Rkey: rec.Rkey, Cid: c.String(), Value: raw}
+	want, err := encodeRecords(did, desired)
+	if err != nil {
+		return false, err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var acct accountRow
-	err := s.db.First(&acct, "did = ?", did).Error
+	err = s.db.First(&acct, "did = ?", did).Error
 	fresh := errors.Is(err, gorm.ErrRecordNotFound)
 	if err != nil && !fresh {
 		return false, err
@@ -189,11 +165,9 @@ func (s *Store) Sync(ctx context.Context, did string, key atcrypto.PrivateKey, d
 		}
 		frames = append(frames, identity, account, genesis.frame)
 		final, old = genesis, cidSet(genesis.blocks)
-	} else if old, err = s.blockCids(did); err != nil {
-		return false, err
 	}
 
-	have, err := s.records(did)
+	have, err := s.recordCids(did)
 	if err != nil {
 		return false, err
 	}
@@ -206,6 +180,11 @@ func (s *Store) Sync(ctx context.Context, did string, key atcrypto.PrivateKey, d
 	}
 	if !changed && !fresh {
 		return false, nil
+	}
+	if !fresh {
+		if old, err = s.blockCids(did); err != nil {
+			return false, err
+		}
 	}
 
 	if changed {
@@ -225,6 +204,32 @@ func (s *Store) Sync(ctx context.Context, did string, key atcrypto.PrivateKey, d
 		return false, err
 	}
 	return true, nil
+}
+
+// encodeRecords validates the desired records and encodes each as the row it
+// would be stored as, keyed by MST path.
+func encodeRecords(did string, desired []Record) (map[string]recordRow, error) {
+	rows := make(map[string]recordRow, len(desired))
+	for _, rec := range desired {
+		if _, err := syntax.ParseNSID(rec.Collection); err != nil {
+			return nil, fmt.Errorf("record %s: %w", rec.Path(), err)
+		}
+		if _, err := syntax.ParseRecordKey(rec.Rkey); err != nil {
+			return nil, fmt.Errorf("record %s: %w", rec.Path(), err)
+		}
+		value := map[string]any{"$type": rec.Collection}
+		maps.Copy(value, rec.Value)
+		raw, err := atdata.MarshalCBOR(value)
+		if err != nil {
+			return nil, fmt.Errorf("encoding %s: %w", rec.Path(), err)
+		}
+		c, err := cborCid(raw)
+		if err != nil {
+			return nil, err
+		}
+		rows[rec.Path()] = recordRow{Did: did, Collection: rec.Collection, Rkey: rec.Rkey, Cid: c.String(), Value: raw}
+	}
+	return rows, nil
 }
 
 // SetActive flips a hosted repo's account status, announcing the change.
@@ -300,7 +305,7 @@ func (s *Store) commit(ctx context.Context, acct *accountRow, key atcrypto.Priva
 	for _, b := range bs.sorted() {
 		blocks = append(blocks, blockRow{Did: acct.Did, Cid: b.Cid().String(), Kind: kindNode, Data: b.RawData()})
 	}
-	for _, path := range sortedKeys(want) {
+	for _, path := range slices.Sorted(maps.Keys(want)) {
 		row := want[path]
 		blocks = append(blocks, blockRow{Did: acct.Did, Cid: row.Cid, Kind: kindRecord, Data: row.Value})
 	}
@@ -393,7 +398,7 @@ func (s *Store) persist(acct *accountRow, b *built, records map[string]recordRow
 			}
 			if len(records) > 0 {
 				rows := make([]recordRow, 0, len(records))
-				for _, path := range sortedKeys(records) {
+				for _, path := range slices.Sorted(maps.Keys(records)) {
 					rows = append(rows, records[path])
 				}
 				if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).CreateInBatches(rows, 100).Error; err != nil {
@@ -420,9 +425,11 @@ func (s *Store) seq() int64 { return s.clock.Next().Time().UnixMicro() }
 
 func (s *Store) now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
-func (s *Store) records(did string) (map[string]recordRow, error) {
+// recordCids maps did's record paths to their rows without the values: a
+// resync that finds nothing to do should not read every record body back.
+func (s *Store) recordCids(did string) (map[string]recordRow, error) {
 	var rows []recordRow
-	if err := s.db.Where("did = ?", did).Find(&rows).Error; err != nil {
+	if err := s.db.Select("did", "collection", "rkey", "cid").Where("did = ?", did).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make(map[string]recordRow, len(rows))
@@ -453,21 +460,13 @@ func cidSet(blocks []blockRow) map[string]bool {
 }
 
 func ops(have, want map[string]recordRow) []*comatproto.SyncSubscribeRepos_RepoOp {
-	paths := map[string]bool{}
-	for p := range have {
-		paths[p] = true
-	}
-	for p := range want {
-		paths[p] = true
-	}
-	sorted := make([]string, 0, len(paths))
-	for p := range paths {
-		sorted = append(sorted, p)
-	}
-	sort.Strings(sorted)
+	// every path on either side, once each, in order
+	paths := slices.AppendSeq(slices.Collect(maps.Keys(have)), maps.Keys(want))
+	slices.Sort(paths)
+	paths = slices.Compact(paths)
 
 	out := []*comatproto.SyncSubscribeRepos_RepoOp{}
-	for _, p := range sorted {
+	for _, p := range paths {
 		prev, had := have[p]
 		next, wants := want[p]
 		switch {
@@ -489,13 +488,4 @@ func link(s string) *lexutil.LexLink {
 	}
 	l := lexutil.LexLink(c)
 	return &l
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }

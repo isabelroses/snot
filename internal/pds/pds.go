@@ -368,12 +368,12 @@ func (h *Handler) internal(w http.ResponseWriter, err error) {
 	writeErr(w, http.StatusInternalServerError, "InternalServerError", "internal error")
 }
 
-func intParam(raw string, def, max int) int {
+func intParam(raw string, def, ceiling int) int {
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 {
 		return def
 	}
-	return min(n, max)
+	return min(n, ceiling)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

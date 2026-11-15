@@ -56,6 +56,9 @@ type Publisher struct {
 	ACL     *state.ACL
 	KnotDid string
 	KnotKey atcrypto.PrivateKey
+	// Adopted returns records taken over from the foster knot for a repo DID,
+	// published alongside the derived ones. Optional.
+	Adopted func(repoDid string) ([]atrepo.Record, error)
 	Logger  *slog.Logger
 }
 
@@ -130,6 +133,14 @@ func (p *Publisher) SyncRepo(ctx context.Context, repoDid string) error {
 			Rkey:       c.Subject,
 			Value:      map[string]any{"createdAt": datetime(c.Created)},
 		})
+	}
+
+	if p.Adopted != nil {
+		adopted, err := p.Adopted(repoDid)
+		if err != nil {
+			return fmt.Errorf("publish: adopted records of %s: %w", repoDid, err)
+		}
+		recs = withAdopted(recs, adopted)
 	}
 
 	changed, err := p.Store.Sync(ctx, repoDid, key, recs)
@@ -277,4 +288,18 @@ func truncate(s string, n int) string {
 	}
 	r := []rune(s)
 	return string(r[:n])
+}
+
+// withAdopted appends adopted records, letting a derived record win its path.
+func withAdopted(derived, adopted []atrepo.Record) []atrepo.Record {
+	taken := make(map[string]bool, len(derived))
+	for _, r := range derived {
+		taken[r.Path()] = true
+	}
+	for _, r := range adopted {
+		if !taken[r.Path()] {
+			derived = append(derived, r)
+		}
+	}
+	return derived
 }

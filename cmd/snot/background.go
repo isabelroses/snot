@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/isabelroses/snot/internal/config"
+	"github.com/isabelroses/snot/internal/handover"
 	"github.com/isabelroses/snot/internal/publish"
 	"github.com/isabelroses/snot/internal/repodid"
 	"github.com/isabelroses/snot/internal/state"
@@ -17,11 +18,13 @@ import (
 const resyncInterval = 15 * time.Minute
 
 type background struct {
-	cfg    *config.Config
-	base   string
-	pub    *publish.Publisher
-	dids   *state.RepoDids
-	logger *slog.Logger
+	cfg  *config.Config
+	base string
+	pub  *publish.Publisher
+	dids *state.RepoDids
+	// handover is nil when no foster knot is configured.
+	handover *handover.Client
+	logger   *slog.Logger
 }
 
 // run backfills records for every repo, then announces the firehose to
@@ -30,6 +33,11 @@ type background struct {
 func (b *background) run(ctx context.Context) {
 	b.resync(ctx)
 	b.upgradeDids(ctx)
+	// the foster knot reads this knot back before it accepts a handover
+	if !waitForListener(ctx, b.cfg.ListenAddr) {
+		return
+	}
+	b.handOver(ctx)
 	requestCrawls(ctx, b.cfg.ListenAddr, b.cfg.Crawlers, b.cfg.Hostname, crawlRetryPause, b.logger)
 
 	t := time.NewTicker(resyncInterval)
@@ -40,8 +48,30 @@ func (b *background) run(ctx context.Context) {
 			return
 		case <-t.C:
 			b.resync(ctx)
+			b.handOver(ctx)
 		}
 	}
+}
+
+// handOver takes every live repo DID that is still shadowed back from the
+// foster knot. Settled DIDs cost nothing, so this also retries failures and
+// covers repos adopted since the last pass.
+func (b *background) handOver(ctx context.Context) {
+	if b.handover == nil {
+		return
+	}
+	all, err := b.dids.All()
+	if err != nil {
+		b.logger.Error("listing repo DIDs", "err", err)
+		return
+	}
+	var live []string
+	for _, did := range all {
+		if info, ok := b.dids.Get(did); ok && !info.Deleted {
+			live = append(live, did)
+		}
+	}
+	b.handover.Run(ctx, live)
 }
 
 func (b *background) resync(ctx context.Context) {

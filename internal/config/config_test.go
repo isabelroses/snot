@@ -220,3 +220,30 @@ crawlers = ["https://relay.example"]
 		t.Errorf("crawlers = %v", c.Crawlers)
 	}
 }
+
+func TestFosterURL(t *testing.T) {
+	c, err := loadEnv(t, baseEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.FosterURL != defaultFosterURL {
+		t.Errorf("default foster_url = %q", c.FosterURL)
+	}
+
+	for name, env := range map[string]map[string]string{
+		"dev":      {"SNOT_DEV": "true"},
+		"disabled": {"SNOT_FOSTER_URL": ""},
+	} {
+		c, err := loadEnv(t, baseEnv(env))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.FosterURL != "" {
+			t.Errorf("%s: foster_url = %q, want none", name, c.FosterURL)
+		}
+	}
+
+	if _, err := loadEnv(t, baseEnv(map[string]string{"SNOT_FOSTER_URL": "knot2.mock.tangled.org"})); err == nil {
+		t.Error("a foster_url without a scheme should be rejected")
+	}
+}

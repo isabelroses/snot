@@ -74,7 +74,7 @@ func Open(dir string) (*DB, error) {
 	if err := gdb.Exec("PRAGMA busy_timeout = 5000").Error; err != nil {
 		return nil, err
 	}
-	if err := gdb.AutoMigrate(&rkeyRow{}, &repoDidRow{}, &eventRow{}, &knotMemberRow{}, &repoCollaboratorRow{}, &kvRow{}); err != nil {
+	if err := gdb.AutoMigrate(&rkeyRow{}, &repoDidRow{}, &eventRow{}, &knotMemberRow{}, &repoCollaboratorRow{}, &kvRow{}, &fosterRecordRow{}, &handoverRow{}); err != nil {
 		return nil, err
 	}
 	// the db holds PLC rotation keys; keep it owner-only.

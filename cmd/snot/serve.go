@@ -23,6 +23,7 @@ import (
 	"github.com/isabelroses/snot/internal/events"
 	"github.com/isabelroses/snot/internal/forgejo"
 	"github.com/isabelroses/snot/internal/gitserve"
+	"github.com/isabelroses/snot/internal/handover"
 	"github.com/isabelroses/snot/internal/pds"
 	"github.com/isabelroses/snot/internal/publish"
 	"github.com/isabelroses/snot/internal/repodid"
@@ -101,6 +102,25 @@ func (c *ServeCmd) Run(cli *CLI) error {
 		KnotKey: knotKey,
 		Logger:  logger.With("component", "publish"),
 	}
+	handovers := db.Handovers()
+	pub.Adopted = func(repoDid string) ([]atrepo.Record, error) {
+		recs, err := handovers.Records(repoDid)
+		if err != nil {
+			return nil, err
+		}
+		return handover.Records(recs)
+	}
+	var fosterClient *handover.Client
+	if cfg.FosterURL != "" {
+		fosterClient = &handover.Client{
+			FosterURL: cfg.FosterURL,
+			KnotKey:   knotKey,
+			Store:     handovers,
+			Publish:   pub.SyncRepo,
+			HTTP:      &http.Client{Timeout: 30 * time.Second},
+			Logger:    logger.With("component", "handover"),
+		}
+	}
 	ph := &pds.Handler{
 		Store:    atStore,
 		Hostname: cfg.Hostname,
@@ -173,11 +193,12 @@ func (c *ServeCmd) Run(cli *CLI) error {
 	defer stop()
 
 	go (&background{
-		cfg:    cfg,
-		base:   base,
-		pub:    pub,
-		dids:   dids,
-		logger: logger.With("component", "background"),
+		cfg:      cfg,
+		base:     base,
+		pub:      pub,
+		dids:     dids,
+		handover: fosterClient,
+		logger:   logger.With("component", "background"),
 	}).run(ctx)
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()

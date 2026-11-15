@@ -49,8 +49,8 @@ func TestDescribeKnot(t *testing.T) {
 	if out.Did != "did:web:knot.example.com" || out.Version == "" {
 		t.Errorf("describeKnot = %+v", out)
 	}
-	if slices.Contains(out.Capabilities, "knot-social-writes") {
-		t.Error("the shim must leave social writes to the foster knot")
+	if !slices.Contains(out.Capabilities, "knot-social-writes") {
+		t.Error("the foster knot only hands repos over to a knot advertising knot-social-writes")
 	}
 	if !slices.Contains(out.Capabilities, "atproto-firehose") {
 		t.Errorf("capabilities = %v", out.Capabilities)

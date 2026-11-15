@@ -34,11 +34,13 @@ const (
 // wireVersion is the knot protocol version knot2 reports in describeKnot.
 const wireVersion = "v1.20.0"
 
-// describeKnotCapabilities deliberately omits knot-social-writes: without it
-// the appview hosts issues and pulls on a foster knot, which a Forgejo shim
-// has no business replacing. repo-did-input is omitted because the knot must
-// hold each repo DID's signing key to publish its refs.
-var describeKnotCapabilities = []string{"tangled1.0", "knot-acl", "atproto-firehose"}
+// describeKnotCapabilities includes knot-social-writes although snot accepts
+// no issue or pull writes: tangled's index resolves a repo DID to exactly one
+// host, and the foster knot only releases a DID to a knot that advertises it
+// (see internal/handover). Without it nothing snot publishes is read.
+// repo-did-input is omitted because the knot must hold each repo DID's
+// signing key to publish its refs.
+var describeKnotCapabilities = []string{"tangled1.0", "knot-acl", "atproto-firehose", "knot-social-writes"}
 
 // Publisher keeps hosted atproto records in step with snot's state.
 type Publisher interface {

@@ -43,7 +43,16 @@ type Config struct {
 	// they (and hydrant behind them) subscribe to this knot's firehose.
 	// SNOT_CRAWLERS is comma-separated; an empty value disables announcing.
 	Crawlers []string
+
+	// FosterURL is tangled's foster knot, which shadow-hosts repo DIDs of
+	// knots that predate knot2 until they acknowledge the handover. snot
+	// takes each of its repo DIDs back from it once. SNOT_FOSTER_URL; an
+	// empty value disables the handover.
+	FosterURL string
 }
+
+// defaultFosterURL is knot2's KNOT_SOCIAL_FOSTER_URL default.
+const defaultFosterURL = "https://knot2.mock.tangled.org"
 
 // defaultCrawlers is knot2's KNOT_CRAWLERS default.
 var defaultCrawlers = []string{
@@ -110,6 +119,14 @@ func loadWith(path string, environ func() []string) (*Config, error) {
 	if dev {
 		crawlers = nil
 	}
+	// like crawlers, a dev knot has nothing the public foster knot can check
+	fosterURL := defaultFosterURL
+	if dev {
+		fosterURL = ""
+	}
+	if k.Exists("foster_url") {
+		fosterURL = strings.TrimSpace(k.String("foster_url"))
+	}
 	if k.Exists("crawlers") {
 		crawlers = configuredCrawlers(k)
 	}
@@ -126,6 +143,7 @@ func loadWith(path string, environ func() []string) (*Config, error) {
 		PlcUrl:        k.String("plc_url"),
 		Dev:           dev,
 		Crawlers:      crawlers,
+		FosterURL:     fosterURL,
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -214,6 +232,9 @@ func (c *Config) validate() error {
 		if !isHTTPURL(crawler) {
 			return fmt.Errorf("crawlers: %q must be an http(s) URL", crawler)
 		}
+	}
+	if c.FosterURL != "" && !isHTTPURL(c.FosterURL) {
+		return fmt.Errorf("foster_url %q must be an http(s) URL", c.FosterURL)
 	}
 	if !isHTTPURL(c.PlcUrl) {
 		return fmt.Errorf("plc_url %q must be an http(s) URL", c.PlcUrl)

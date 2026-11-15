@@ -489,3 +489,13 @@ func link(s string) *lexutil.LexLink {
 	l := lexutil.LexLink(c)
 	return &l
 }
+
+// RecordCid returns the CID a record would be stored under, without writing
+// anything.
+func RecordCid(rec Record) (string, error) {
+	rows, err := encodeRecords("did:web:cid.invalid", []Record{rec})
+	if err != nil {
+		return "", err
+	}
+	return rows[rec.Path()].Cid, nil
+}
